@@ -32,14 +32,14 @@
  */
 Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a), b(b), c(c), m(m), n(n), p(p) {}
 
-__global__ void gpu_matmul_forward(int *a_gpu, int *b_gpu, int *c_gpu, int *m, int *n, int *p)
+__global__ void gpu_matmul_forward(int *a_gpu, int *b_gpu, int *c_gpu, int m, int n, int p)
 {
     int i = blockIdx.x;
     int k = threadIdx.x;
 
     c[i * p + k] = 0;
 
-    for (int j = 0; j < n; j++)
+    for (int j = 0; j < *n; j++)
         c[i * p + k] += a[i * n + j] * b[j * p + k];
 }
 
@@ -65,7 +65,7 @@ void Matmul::forward(bool training)
 
     dim3 blocksPerGrid(m, 1, 1);
     dim3 threadsPerBlock(min(p, 1024), 1, 1);
-    gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_gpu, b_gpu, c_gpu, m_gpu, n_gpu, p_gpu);
+    gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_gpu, b_gpu, c_gpu, *m_gpu, *n_gpu, *p_gpu);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
