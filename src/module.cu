@@ -70,13 +70,13 @@ void Matmul::forward(bool training)
     //CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
-    c->zero();
+    /*c->zero();
     for (int i = 0; i < m; i++)
         for (int j = 0; j < n; j++)
         {
             for (int k = 0; k < p; k++)
                 c->data[i * p + k] += a->data[i * n + j] * b->data[j * p + k];
-        }
+        }*/
     // CHECK(cudaMemcpy(c, c_gpu, sizeof(float) * m * p, cudaMemcpyDeviceToHost));
     timer_stop(TMR_MATMUL_FW);
 }
