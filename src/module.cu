@@ -32,51 +32,52 @@
  */
 Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a), b(b), c(c), m(m), n(n), p(p) {}
 
-__global__ void gpu_matmul_forward(int *a_gpu, int *b_gpu, int *c_gpu, int m, int n, int p)
+__global__ void gpu_matmul_forward(float *a_gpu, float *b_gpu, float *c_gpu, int *m, int *n, int *p)
 {
     int i = blockIdx.x;
     int k = threadIdx.x;
 
-    c_gpu[i * p + k] = 0;
+    c_gpu[i * (*p) + k] = 0;
 
-    for (int j = 0; j < n; j++)
-        c_gpu[i * p + k] += a_gpu[i * n + j] * b_gpu[j * p + k];
+    for (int j = 0; j < (*n); j++)
+        c_gpu[i * (*p) + k] += a_gpu[i * (*n) + j] * b_gpu[j * (*p) + k];
 }
 
 void Matmul::forward(bool training)
 {
     timer_start(TMR_MATMUL_FW);
 
-    int *a_gpu, *b_gpu, *c_gpu, *m_gpu, *n_gpu, *p_gpu;
+    float *a_gpu, *b_gpu, *c_gpu;
+    int *m_gpu, *n_gpu, *p_gpu;
 
-    CHECK(cudaMalloc(&a_gpu, sizeof(int) * m * n));
-    CHECK(cudaMalloc(&b_gpu, sizeof(int) * n * p));
-    CHECK(cudaMalloc(&c_gpu, sizeof(int) * m * p));
+    CHECK(cudaMalloc(&a_gpu, sizeof(float) * m * n));
+    CHECK(cudaMalloc(&b_gpu, sizeof(float) * n * p));
+    CHECK(cudaMalloc(&c_gpu, sizeof(float) * m * p));
     CHECK(cudaMalloc(&m_gpu, sizeof(int)));
     CHECK(cudaMalloc(&n_gpu, sizeof(int)));
     CHECK(cudaMalloc(&p_gpu, sizeof(int)));
 
-    CHECK(cudaMemcpy(a_gpu, a->data, sizeof(int) * m * n, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(b_gpu, b->data, sizeof(int) * n * p, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(c_gpu, c->data, sizeof(int) * m * p, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(m_gpu, m, sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(n_gpu, n, sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(p_gpu, p, sizeof(int), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(a_gpu, a, sizeof(float) * m * n, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(b_gpu, b, sizeof(float) * n * p, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(c_gpu, c, sizeof(float) * m * p, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(m_gpu, &m, sizeof(int), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(n_gpu, &n, sizeof(int), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(p_gpu, &p, sizeof(int), cudaMemcpyHostToDevice));
 
     dim3 blocksPerGrid(m, 1, 1);
     dim3 threadsPerBlock(min(p, 1024), 1, 1);
-    gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_gpu, b_gpu, c_gpu, *m_gpu, *n_gpu, *p_gpu);
-    CHECK_KERNELCALL();
+    gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_gpu, b_gpu, c_gpu, m_gpu, n_gpu, p_gpu);
+    //CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
-    /*c->zero();
+    c->zero();
     for (int i = 0; i < m; i++)
         for (int j = 0; j < n; j++)
         {
             for (int k = 0; k < p; k++)
                 c->data[i * p + k] += a->data[i * n + j] * b->data[j * p + k];
-        }*/
-    CHECK(cudaMemcpy(c->data, c_gpu, sizeof(int) * m * p, cudaMemcpyDeviceToHost));
+        }
+    // CHECK(cudaMemcpy(c, c_gpu, sizeof(float) * m * p, cudaMemcpyDeviceToHost));
     timer_stop(TMR_MATMUL_FW);
 }
 
