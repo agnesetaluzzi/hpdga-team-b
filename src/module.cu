@@ -39,7 +39,7 @@ __global__ void gpu_matmul_forward(int *a_gpu, int *b_gpu, int *c_gpu, int m, in
 
     c[i * p + k] = 0;
 
-    for (int j = 0; j < *n; j++)
+    for (int j = 0; j < n; j++)
         c[i * p + k] += a[i * n + j] * b[j * p + k];
 }
 
