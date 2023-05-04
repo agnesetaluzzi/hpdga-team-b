@@ -37,7 +37,7 @@ __global__ void gpu_matmul_forward(int *a_gpu, int *b_gpu, int *c_gpu, int m, in
     int i = blockIdx.x;
     int k = threadIdx.x;
 
-    c[i * p + k] = 0;
+    c_gpu[i * p + k] = 0;
 
     for (int j = 0; j < n; j++)
         c_gpu[i * p + k] += a_gpu[i * n + j] * b_gpu[j * p + k];
