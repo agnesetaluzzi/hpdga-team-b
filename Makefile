@@ -1,4 +1,4 @@
-CXX=gcc
+CXX=nvcc
 CXXFLAGS= -O3 -std=c++11 -Wall -Wno-sign-compare -Wno-unused-variable -Wno-unknown-pragmas
 LDFLAGS=-lm -lstdc++
 
