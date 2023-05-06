@@ -1,8 +1,9 @@
 #include "../include/module.h"
 #include "../include/rand.h"
 #include "../include/timer.h"
-#include <cmath>
+#include <vector>
 
+/* error handling for CUDA API functions */
 #define CHECK(call)                                                  \
     {                                                                \
         const cudaError_t err = call;                                \
@@ -50,6 +51,11 @@ void Matmul::forward(bool training)
     float *a_gpu, *b_gpu, *c_gpu;
     int *m_gpu, *n_gpu, *p_gpu;
 
+    // GPUs do not support std::vector, etc. so I have to use arrays
+    // since the spec now guarantees vectors store their elements contiguously, to transform a std::vector to an array:
+    // std::vector<double> v;
+    // double *a = &v[0];
+
     CHECK(cudaMalloc(&a_gpu, sizeof(float) * m * n));
     CHECK(cudaMalloc(&b_gpu, sizeof(float) * n * p));
     CHECK(cudaMalloc(&c_gpu, sizeof(float) * m * p));
@@ -57,27 +63,45 @@ void Matmul::forward(bool training)
     CHECK(cudaMalloc(&n_gpu, sizeof(int)));
     CHECK(cudaMalloc(&p_gpu, sizeof(int)));
 
-    CHECK(cudaMemcpy(a_gpu, a, sizeof(float) * m * n, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(b_gpu, b, sizeof(float) * n * p, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(c_gpu, c, sizeof(float) * m * p, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(a_gpu, &(a->data[0]), sizeof(float) * m * n, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(b_gpu, &(b->data[0]), sizeof(float) * n * p, cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(c_gpu, &(c->data[0]), sizeof(float) * m * p, cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(m_gpu, &m, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(n_gpu, &n, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(p_gpu, &p, sizeof(int), cudaMemcpyHostToDevice));
 
     dim3 blocksPerGrid(m, 1, 1);
-    dim3 threadsPerBlock(min(p, 1024), 1, 1);
+    dim3 threadsPerBlock(p, 1, 1);
     gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_gpu, b_gpu, c_gpu, m_gpu, n_gpu, p_gpu);
-    //CHECK_KERNELCALL();
+    CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
-    c->zero();
+    /*c->zero();
     for (int i = 0; i < m; i++)
         for (int j = 0; j < n; j++)
         {
             for (int k = 0; k < p; k++)
                 c->data[i * p + k] += a->data[i * n + j] * b->data[j * p + k];
-        }
-    // CHECK(cudaMemcpy(c, c_gpu, sizeof(float) * m * p, cudaMemcpyDeviceToHost));
+        }*/
+
+    // convert an array to a std::vector:
+    // int src[] = { 1, 2, 3, 4, 5 };
+    // int n = sizeof(src) / sizeof(src[0]);
+    // std::vector<int> dest(src, src + n);
+
+    float *c_data_from_gpu;
+    c_data_from_gpu = (float *)malloc(m * p * sizeof(float));
+    CHECK(cudaMemcpy(c_data_from_gpu, c_gpu, sizeof(float) * m * p, cudaMemcpyDeviceToHost));
+    std::vector<float> c_data_from_gpu_vector(c_data_from_gpu, c_data_from_gpu + m * p);
+    c->data = c_data_from_gpu_vector;
+
+    CHECK(cudaFree(a_gpu));
+    CHECK(cudaFree(b_gpu));
+    CHECK(cudaFree(c_gpu));
+    CHECK(cudaFree(m_gpu));
+    CHECK(cudaFree(n_gpu));
+    CHECK(cudaFree(p_gpu));
+
     timer_stop(TMR_MATMUL_FW);
 }
 
