@@ -1,8 +1,9 @@
 #include "../include/module.h"
 #include "../include/rand.h"
 #include "../include/timer.h"
-#include <cmath>
+#include <vector>
 
+/* error handling for CUDA API functions */
 #define CHECK(call)                                                  \
     {                                                                \
         const cudaError_t err = call;                                \
@@ -30,54 +31,80 @@
 /**
  * Dense matrix multiplication layer.
  */
-Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a), b(b), c(c), m(m), n(n), p(p) {}
 
-__global__ void gpu_matmul_forward(float *a_gpu, float *b_gpu, float *c_gpu, int *m, int *n, int *p)
+bool value_to_gpu = false;
+
+float *a_data;
+float *b_data;
+float *c_data;
+int *M, *N, *P;
+
+Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a), b(b), c(c), m(m), n(n), p(p) {
+	cudaMallocManaged(&a_data, m * n * sizeof(float));
+	cudaMallocManaged(&b_data, n * p * sizeof(float));
+	cudaMallocManaged(&c_data, m * p * sizeof(float));
+	cudaMallocManaged(&M, sizeof(int));
+	cudaMallocManaged(&N, sizeof(int));
+	cudaMallocManaged(&P, sizeof(int));
+
+	cudaMemPrefetchAsync(a_data, m * n * sizeof(float), 0);
+	cudaMemPrefetchAsync(b_data, n * p * sizeof(float), 0);
+	cudaMemPrefetchAsync(c_data, m * p * sizeof(float), 0);
+	cudaMemPrefetchAsync(M, sizeof(int), 0);
+	cudaMemPrefetchAsync(N, sizeof(int), 0);
+	cudaMemPrefetchAsync(P, sizeof(int), 0);
+
+	CHECK(cudaDeviceSynchronize());
+
+	//cudaMemPrefetchAsync(d_a, N*sizeof(float), 0);
+}
+
+__global__ void gpu_matmul_forward(float *a_data, float *b_data, float *c_data, int *data, int *N, int *P)
 {
     int i = blockIdx.x;
     int k = threadIdx.x;
-
-    c_gpu[i * (*p) + k] = 0;
-
-    for (int j = 0; j < (*n); j++)
-        c_gpu[i * (*p) + k] += a_gpu[i * (*n) + j] * b_gpu[j * (*p) + k];
+    c_data[i * (*P) + k] = 0;
+    for (int j = 0; j < (*N); j++)
+        c_data[i * (*P) + k] += a_data[i * (*N) + j] * b_data[j * (*P) + k];
 }
 
 void Matmul::forward(bool training)
 {
     timer_start(TMR_MATMUL_FW);
+	CHECK(cudaDeviceSynchronize());
 
-    float *a_gpu, *b_gpu, *c_gpu;
-    int *m_gpu, *n_gpu, *p_gpu;
+	for(int i = 0; i < m * n; i++){
+		a_data[i] = a->data[i];
+	}
 
-    CHECK(cudaMalloc(&a_gpu, sizeof(float) * m * n));
-    CHECK(cudaMalloc(&b_gpu, sizeof(float) * n * p));
-    CHECK(cudaMalloc(&c_gpu, sizeof(float) * m * p));
-    CHECK(cudaMalloc(&m_gpu, sizeof(int)));
-    CHECK(cudaMalloc(&n_gpu, sizeof(int)));
-    CHECK(cudaMalloc(&p_gpu, sizeof(int)));
+	for(int i = 0; i < n * p; i++){
+		b_data[i] = b->data[i];
+	}
 
-    CHECK(cudaMemcpy(a_gpu, a, sizeof(float) * m * n, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(b_gpu, b, sizeof(float) * n * p, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(c_gpu, c, sizeof(float) * m * p, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(m_gpu, &m, sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(n_gpu, &n, sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(p_gpu, &p, sizeof(int), cudaMemcpyHostToDevice));
+	*M = m;
+	*N = n;
+	*P = p;
+
+	cudaMemPrefetchAsync(a_data, m * n * sizeof(float), 0);
+	cudaMemPrefetchAsync(b_data, n * p * sizeof(float), 0);
+	cudaMemPrefetchAsync(c_data, m * p * sizeof(float), 0);
+	cudaMemPrefetchAsync(M, sizeof(int), 0);
+	cudaMemPrefetchAsync(N, sizeof(int), 0);
+	cudaMemPrefetchAsync(P, sizeof(int), 0);
+
+	CHECK(cudaDeviceSynchronize());
 
     dim3 blocksPerGrid(m, 1, 1);
-    dim3 threadsPerBlock(min(p, 1024), 1, 1);
-    gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_gpu, b_gpu, c_gpu, m_gpu, n_gpu, p_gpu);
-    //CHECK_KERNELCALL();
+    dim3 threadsPerBlock(p, 1, 1);
+
+    gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_data, b_data, c_data, M, N, P);
+    CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
-    c->zero();
-    for (int i = 0; i < m; i++)
-        for (int j = 0; j < n; j++)
-        {
-            for (int k = 0; k < p; k++)
-                c->data[i * p + k] += a->data[i * n + j] * b->data[j * p + k];
-        }
-    // CHECK(cudaMemcpy(c, c_gpu, sizeof(float) * m * p, cudaMemcpyDeviceToHost));
+	for(int i = 0; i < (*M) * (*P); i++){
+		c->data[i] = c_data[i];
+	}
+
     timer_stop(TMR_MATMUL_FW);
 }
 
