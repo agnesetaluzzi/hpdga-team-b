@@ -27,6 +27,17 @@
         }                                                            \
     }
 
+__global__ void gpu_zero(float *data, int *p)
+{
+    int i = blockIdx.x;
+    int k = threadIdx.x;
+
+    data[i * (*p) + k] = 0;
+}
+
+float *a_gpu, *b_gpu, *c_gpu;
+int *m_gpu, *n_gpu, *p_gpu;
+
 // ################################################################################################################
 /**
  * Dense matrix multiplication layer.
@@ -48,48 +59,31 @@ void Matmul::forward(bool training)
 {
     timer_start(TMR_MATMUL_FW);
 
-    float *a_gpu, *b_gpu, *c_gpu;
-    int *m_gpu, *n_gpu, *p_gpu;
-
     // GPUs do not support std::vector, etc. so I have to use arrays
     // since the spec now guarantees vectors store their elements contiguously, to transform a std::vector to an array:
     // std::vector<double> v;
     // double *a = &v[0];
 
-    CHECK(cudaMalloc(&a_gpu, sizeof(float) * m * n));
-    CHECK(cudaMalloc(&b_gpu, sizeof(float) * n * p));
-    CHECK(cudaMalloc(&c_gpu, sizeof(float) * m * p));
-    CHECK(cudaMalloc(&m_gpu, sizeof(int)));
-    CHECK(cudaMalloc(&n_gpu, sizeof(int)));
-    CHECK(cudaMalloc(&p_gpu, sizeof(int)));
-
-    CHECK(cudaMemcpy(a_gpu, &(a->data[0]), sizeof(float) * m * n, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(b_gpu, &(b->data[0]), sizeof(float) * n * p, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(c_gpu, &(c->data[0]), sizeof(float) * m * p, cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(m_gpu, &m, sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(n_gpu, &n, sizeof(int), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(p_gpu, &p, sizeof(int), cudaMemcpyHostToDevice));
-
-    dim3 blocksPerGrid(m, 1, 1);
+    /*dim3 blocksPerGrid(m, 1, 1);
     dim3 threadsPerBlock(p, 1, 1);
     gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_gpu, b_gpu, c_gpu, m_gpu, n_gpu, p_gpu);
     CHECK_KERNELCALL();
-    CHECK(cudaDeviceSynchronize());
+    CHECK(cudaDeviceSynchronize());*/
 
-    /*c->zero();
+    c->zero();
     for (int i = 0; i < m; i++)
         for (int j = 0; j < n; j++)
         {
             for (int k = 0; k < p; k++)
                 c->data[i * p + k] += a->data[i * n + j] * b->data[j * p + k];
-        }*/
+        }
 
     // convert an array to a std::vector:
     // int src[] = { 1, 2, 3, 4, 5 };
     // int n = sizeof(src) / sizeof(src[0]);
     // std::vector<int> dest(src, src + n);
 
-    float *c_data_from_gpu;
+    /*float *c_data_from_gpu;
     c_data_from_gpu = (float *)malloc(m * p * sizeof(float));
     CHECK(cudaMemcpy(c_data_from_gpu, c_gpu, sizeof(float) * m * p, cudaMemcpyDeviceToHost));
     std::vector<float> c_data_from_gpu_vector(c_data_from_gpu, c_data_from_gpu + m * p);
@@ -100,7 +94,7 @@ void Matmul::forward(bool training)
     CHECK(cudaFree(c_gpu));
     CHECK(cudaFree(m_gpu));
     CHECK(cudaFree(n_gpu));
-    CHECK(cudaFree(p_gpu));
+    CHECK(cudaFree(p_gpu));*/
 
     timer_stop(TMR_MATMUL_FW);
 }
@@ -131,17 +125,83 @@ void Matmul::backward()
  */
 SparseMatmul::SparseMatmul(Variable *a, Variable *b, Variable *c, SparseIndex *sp, int m, int n, int p) : a(a), b(b), c(c), sp(sp), m(m), n(n), p(p) {}
 
+__global__ void gpu_sparse_matmul_forward(float *a_gpu, float *b_gpu, float *c_gpu, int *sp_indptr_gpu, int *sp_indices_gpu, int *p)
+{
+    int i = blockIdx.x;
+    int k = threadIdx.x;
+
+    for (int jj = sp_indptr_gpu[i]; jj < sp_indptr_gpu[i + 1]; jj++)
+    {
+        int j = sp_indices_gpu[jj];
+        c_gpu[i * (*p) + k] += a_gpu[jj] * b_gpu[j * (*p) + k];
+    }
+}
+
 void SparseMatmul::forward(bool training)
 {
     timer_start(TMR_SPMATMUL_FW);
-    c->zero();
+
+    int *sp_indptr_gpu, *sp_indices_gpu;
+
+    CHECK(cudaMalloc(&a_gpu, sizeof(float) * m * n));
+    CHECK(cudaMalloc(&b_gpu, sizeof(float) * n * p));
+    CHECK(cudaMalloc(&c_gpu, sizeof(float) * m * p));
+    CHECK(cudaMalloc(&m_gpu, sizeof(int)));
+    CHECK(cudaMalloc(&n_gpu, sizeof(int)));
+    CHECK(cudaMalloc(&p_gpu, sizeof(int)));
+
+    CHECK(cudaMalloc(&sp_indptr_gpu, sizeof(int) * sp->indptr.size()));
+    CHECK(cudaMalloc(&sp_indices_gpu, sizeof(int) * sp->indices.size()));
+
+    CHECK(cudaMemcpy(a_gpu, &(a->data[0]), sizeof(float) * a->data.size(), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(b_gpu, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(c_gpu, &(c->data[0]), sizeof(float) * c->data.size(), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(m_gpu, &m, sizeof(int), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(n_gpu, &n, sizeof(int), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(p_gpu, &p, sizeof(int), cudaMemcpyHostToDevice));
+
+    CHECK(cudaMemcpy(sp_indptr_gpu, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(sp_indices_gpu, &(sp->indices[0]), sizeof(int) * sp->indices.size(), cudaMemcpyHostToDevice));
+
+    dim3 blocksPerGrid(sp->indptr.size() - 1, 1, 1);
+    dim3 threadsPerBlock(p, 1, 1);
+    dim3 blocksPerGridZero(m, 1, 1);
+    gpu_zero<<<blocksPerGridZero, threadsPerBlock>>>(c_gpu, p_gpu);
+    CHECK_KERNELCALL();
+    CHECK(cudaDeviceSynchronize());
+    gpu_sparse_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_gpu, b_gpu, c_gpu, sp_indptr_gpu, sp_indices_gpu, p_gpu);
+    CHECK_KERNELCALL();
+    CHECK(cudaDeviceSynchronize());
+
+    /*c->zero();
     for (int i = 0; i < sp->indptr.size() - 1; i++)
         for (int jj = sp->indptr[i]; jj < sp->indptr[i + 1]; jj++)
         {
             int j = sp->indices[jj];
             for (int k = 0; k < p; k++)
                 c->data[i * p + k] += a->data[jj] * b->data[j * p + k];
-        }
+        }*/
+
+    // convert an array to a std::vector:
+    // int src[] = { 1, 2, 3, 4, 5 };
+    // int n = sizeof(src) / sizeof(src[0]);
+    // std::vector<int> dest(src, src + n);
+
+    float *c_data_from_gpu;
+    c_data_from_gpu = (float *)malloc(m * p * sizeof(float));
+    CHECK(cudaMemcpy(c_data_from_gpu, c_gpu, sizeof(float) * m * p, cudaMemcpyDeviceToHost));
+    std::vector<float> c_data_from_gpu_vector(c_data_from_gpu, c_data_from_gpu + m * p);
+    c->data = c_data_from_gpu_vector;
+
+    CHECK(cudaFree(a_gpu));
+    CHECK(cudaFree(b_gpu));
+    CHECK(cudaFree(c_gpu));
+    CHECK(cudaFree(m_gpu));
+    CHECK(cudaFree(n_gpu));
+    CHECK(cudaFree(p_gpu));
+    CHECK(cudaFree(sp_indptr_gpu));
+    CHECK(cudaFree(sp_indices_gpu));
+
     timer_stop(TMR_SPMATMUL_FW);
 }
 
