@@ -70,7 +70,7 @@ void Matmul::forward(bool training)
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());*/
 
-    c->zero();
+    /*c->zero();
     for (int i = 0; i < m; i++)
         for (int j = 0; j < n; j++)
         {
@@ -95,7 +95,7 @@ void Matmul::forward(bool training)
     CHECK(cudaFree(m_gpu));
     CHECK(cudaFree(n_gpu));
     CHECK(cudaFree(p_gpu));*/
-
+ 
     timer_stop(TMR_MATMUL_FW);
 }
 
