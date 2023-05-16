@@ -1,7 +1,7 @@
 #include "../include/module.h"
 #include "../include/rand.h"
 #include "../include/timer.h"
-#include <cmath>
+#include <vector>
 
 /* error handling for CUDA API functions */
 #define CHECK(call)                                                  \
@@ -27,7 +27,6 @@
         }                                                            \
     }
 
-
 // ################################################################################################################
 
 float *a_data, *b_data, *c_data;
@@ -38,17 +37,17 @@ int *M, *N, *P;
  * Dense matrix multiplication layer. 
 */
 Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p): a(a), b(b), c(c), m(m), n(n), p(p) {
-	cudaMalloc(&a_data, a->data.size() * sizeof(float));
-	cudaMalloc(&b_data, b->data.size() * sizeof(float));
-	cudaMalloc(&c_data, c->data.size() * sizeof(float));
+	  cudaMalloc(&a_data, a->data.size() * sizeof(float));
+	  cudaMalloc(&b_data, b->data.size() * sizeof(float));
+	  cudaMalloc(&c_data, c->data.size() * sizeof(float));
 	
-	cudaMalloc(&a_grad, a->grad.size() * sizeof(float));
-	cudaMalloc(&b_grad, b->grad.size() * sizeof(float));
-	cudaMalloc(&c_grad, c->grad.size() * sizeof(float));
+	  cudaMalloc(&a_grad, a->grad.size() * sizeof(float));
+	  cudaMalloc(&b_grad, b->grad.size() * sizeof(float));
+	  cudaMalloc(&c_grad, c->grad.size() * sizeof(float));
 	
-	cudaMalloc(&M, sizeof(int));
-	cudaMalloc(&N, sizeof(int));
-	cudaMalloc(&P, sizeof(int));
+	  cudaMalloc(&M, sizeof(int));
+	  cudaMalloc(&N, sizeof(int));
+	  cudaMalloc(&P, sizeof(int));
 }
 
 __global__ void gpu_matmul_forward(float *a_gpu, float *b_gpu, float *c_gpu, int *m, int *n, int *p)
@@ -72,11 +71,11 @@ void Matmul::forward(bool training) {
     CHECK(cudaMemcpy(N, &n, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(P, &p, sizeof(int), cudaMemcpyHostToDevice));
 	
-	dim3 blocksPerGrid(m, 1, 1);
+	  dim3 blocksPerGrid(m, 1, 1);
     dim3 threadsPerBlock(p, 1, 1);
     gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_data, b_data, c_data, M, N, P);
     CHECK_KERNELCALL();
-	CHECK(cudaDeviceSynchronize());
+	  CHECK(cudaDeviceSynchronize());
 	
     CHECK(cudaMemcpy(&c->data[0], c_data, sizeof(float) * c->data.size(), cudaMemcpyDeviceToHost));
     timer_stop(TMR_MATMUL_FW);
@@ -84,12 +83,12 @@ void Matmul::forward(bool training) {
 
 __global__ void gpu_matmul_backward1(float *a_grad, float *a_data, float *b_data, float *b_grad, float *c_grad, int *m, int *n, int *p)
 {
-	int i = blockIdx.x;
+	  int i = blockIdx.x;
     int j = threadIdx.x;
 	
-	a_grad[i * (*n) + j] = 0;	
+	  a_grad[i * (*n) + j] = 0;	
 	
-	float tmp = 0;
+	  float tmp = 0;
     for (int k = 0; k < *p; k++){
         tmp += c_grad[i * (*p) + k] * b_data[j * (*p) + k];
     }
@@ -98,14 +97,15 @@ __global__ void gpu_matmul_backward1(float *a_grad, float *a_data, float *b_data
 
 __global__ void gpu_matmul_backward2(float *a_grad, float *a_data, float *b_data, float *b_grad, float *c_grad, int *m, int *n, int *p)
 {
-	int j = blockIdx.x;
+	  int j = blockIdx.x;
     int k = threadIdx.x;
     
-	b_grad[j * (*p) + k] = 0;
+	  b_grad[j * (*p) + k] = 0;
 	
-    for (int i = 0; i < (*m); i++){
-		b_grad[j * (*p) + k] += c_grad[i * (*p) + k] * a_data[i * (*n) + j];
-	}
+    for (int i = 0; i < (*m); i++)
+    {
+		  b_grad[j * (*p) + k] += c_grad[i * (*p) + k] * a_data[i * (*n) + j];
+	  }
 }
 
 void Matmul::backward() {
@@ -119,18 +119,18 @@ void Matmul::backward() {
     CHECK(cudaMemcpy(N, &n, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(P, &p, sizeof(int), cudaMemcpyHostToDevice));
 	
-	dim3 blocksPerGrid1(m, 1, 1);
+	  dim3 blocksPerGrid1(m, 1, 1);
     dim3 threadsPerBlock1(n, 1, 1);
     gpu_matmul_backward1<<<blocksPerGrid1, threadsPerBlock1>>>(a_grad, a_data, b_data, b_grad, c_grad, M, N, P);
-	CHECK(cudaDeviceSynchronize());
+	  CHECK(cudaDeviceSynchronize());
 		
-	dim3 blocksPerGrid2(n, 1, 1);
+	  dim3 blocksPerGrid2(n, 1, 1);
     dim3 threadsPerBlock2(p, 1, 1);
-	gpu_matmul_backward2<<<blocksPerGrid2, threadsPerBlock2>>>(a_grad, a_data, b_data, b_grad, c_grad, M, N, P);
-	CHECK(cudaDeviceSynchronize());
+	  gpu_matmul_backward2<<<blocksPerGrid2, threadsPerBlock2>>>(a_grad, a_data, b_data, b_grad, c_grad, M, N, P);
+	  CHECK(cudaDeviceSynchronize());
 		
-	CHECK(cudaMemcpy(&a->grad[0], a_grad, sizeof(float) * a->grad.size(), cudaMemcpyDeviceToHost));
-	CHECK(cudaMemcpy(&b->grad[0], b_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));
+	  CHECK(cudaMemcpy(&a->grad[0], a_grad, sizeof(float) * a->grad.size(), cudaMemcpyDeviceToHost));
+	  CHECK(cudaMemcpy(&b->grad[0], b_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));
 	
     /*a->zero_grad();
     b->zero_grad();
@@ -162,20 +162,20 @@ int *M2, *N2, *P2;
 */
 
 SparseMatmul::SparseMatmul(Variable *a, Variable *b, Variable *c, SparseIndex *sp, int m, int n, int p): a(a), b(b), c(c), sp(sp), m(m), n(n), p(p) {
-	cudaMalloc(&a2_data, a->data.size() * sizeof(float));
-	cudaMalloc(&b2_data, b->data.size() * sizeof(float));
-	cudaMalloc(&c2_data, c->data.size() * sizeof(float));
+	  cudaMalloc(&a2_data, a->data.size() * sizeof(float));
+	  cudaMalloc(&b2_data, b->data.size() * sizeof(float));
+	  cudaMalloc(&c2_data, c->data.size() * sizeof(float));
 	
-	cudaMalloc(&a2_grad, a->grad.size() * sizeof(float));
-	cudaMalloc(&b2_grad, b->grad.size() * sizeof(float));
-	cudaMalloc(&c2_grad, c->grad.size() * sizeof(float));
+	  cudaMalloc(&a2_grad, a->grad.size() * sizeof(float));
+	  cudaMalloc(&b2_grad, b->grad.size() * sizeof(float));
+	  cudaMalloc(&c2_grad, c->grad.size() * sizeof(float));
 	
-	cudaMalloc(&sp_indptr, sp->indptr.size() * sizeof(float));
-	cudaMalloc(&sp_indices, sp->indices.size() * sizeof(float));
+	  cudaMalloc(&sp_indptr, sp->indptr.size() * sizeof(float));
+	  cudaMalloc(&sp_indices, sp->indices.size() * sizeof(float));
 	
-	cudaMalloc(&M2, sizeof(int));
-	cudaMalloc(&N2, sizeof(int));
-	cudaMalloc(&P2, sizeof(int));
+	  cudaMalloc(&M2, sizeof(int));
+	  cudaMalloc(&N2, sizeof(int));
+	  cudaMalloc(&P2, sizeof(int));
 }
 
 __global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c_data, int *sp_indptr, int *sp_indices, int *p)
@@ -183,9 +183,10 @@ __global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c
     int i = blockIdx.x;
     int k = threadIdx.x;
 
-	c_data[i * (*p) + k] = 0;
+	  c_data[i * (*p) + k] = 0;
 
-    for (int jj = sp_indptr[i]; jj < sp_indptr[i + 1]; jj++){
+    for (int jj = sp_indptr[i]; jj < sp_indptr[i + 1]; jj++)
+    {
         int j = sp_indices[jj];
         c_data[i * (*p) + k] += a_data[jj] * b_data[j * (*p) + k];
     }
@@ -194,7 +195,7 @@ __global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c
 void SparseMatmul::forward(bool training) {
     timer_start(TMR_SPMATMUL_FW);
 	
-	CHECK(cudaMemcpy(sp_indptr, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
+	  CHECK(cudaMemcpy(sp_indptr, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(sp_indices, &(sp->indices[0]), sizeof(int) * sp->indices.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(a2_data, &(a->data[0]), sizeof(float) * a->data.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(b2_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
@@ -203,17 +204,17 @@ void SparseMatmul::forward(bool training) {
     CHECK(cudaMemcpy(N2, &n, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(P2, &p, sizeof(int), cudaMemcpyHostToDevice));
 	
-	dim3 blocksPerGrid(sp->indptr.size() - 1, 1, 1);
+	  dim3 blocksPerGrid(sp->indptr.size() - 1, 1, 1);
     dim3 threadsPerBlock(p, 1, 1);
     gpu_sparse_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a2_data, b2_data, c2_data, sp_indptr, sp_indices, P2);
     CHECK_KERNELCALL();
-	CHECK(cudaDeviceSynchronize());
+	  CHECK(cudaDeviceSynchronize());
 	
     CHECK(cudaMemcpy(&c->data[0], c2_data, sizeof(float) * c->data.size(), cudaMemcpyDeviceToHost));
-	
     /*c->zero();
     for (int i = 0; i < sp->indptr.size() - 1; i++)
-        for (int jj = sp->indptr[i]; jj < sp->indptr[i + 1]; jj++) {
+        for (int jj = sp->indptr[i]; jj < sp->indptr[i + 1]; jj++) 
+        {
             int j = sp->indices[jj];
             for (int k = 0; k < p; k++)
                 c->data[i * p + k] += a->data[jj] * b->data[j * p + k];
@@ -247,18 +248,18 @@ void SparseMatmul::backward() {
     CHECK(cudaMemcpy(N2, &n, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(P2, &p, sizeof(int), cudaMemcpyHostToDevice));
 	
-	int max_sp_indptr = 0;
-	for(int i = 0; i < sp->indptr.size(); i++){
-		if(sp->indptr[i] > max_sp_indptr) max_sp_indptr = sp->indptr[i];
-	}
+	  int max_sp_indptr = 0;
+	  for(int i = 0; i < sp->indptr.size(); i++){
+		    if(sp->indptr[i] > max_sp_indptr) max_sp_indptr = sp->indptr[i];
+    }
 	
-	dim3 blocksPerGrid(max_sp_indptr, 1, 1);
+	  dim3 blocksPerGrid(max_sp_indptr, 1, 1);
     dim3 threadsPerBlock(p, 1, 1);
     gpu_sparse_matmul_backward<<<blocksPerGrid, threadsPerBlock>>>(a2_data, b2_grad, c2_grad, sp_indptr, sp_indices, P2, sp->indptr.size());
     CHECK_KERNELCALL();
-	CHECK(cudaDeviceSynchronize());
+	  CHECK(cudaDeviceSynchronize());
 	
-	CHECK(cudaMemcpy(&b->grad[0], b2_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));*/
+	  CHECK(cudaMemcpy(&b->grad[0], b2_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));*/
 	
     b->zero_grad();
     int row = 0;
