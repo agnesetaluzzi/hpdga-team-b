@@ -34,20 +34,21 @@ float *a_grad, *b_grad, *c_grad;
 int *M, *N, *P;
 
 /**
- * Dense matrix multiplication layer. 
-*/
-Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p): a(a), b(b), c(c), m(m), n(n), p(p) {
-	  cudaMalloc(&a_data, a->data.size() * sizeof(float));
-	  cudaMalloc(&b_data, b->data.size() * sizeof(float));
-	  cudaMalloc(&c_data, c->data.size() * sizeof(float));
-	
-	  cudaMalloc(&a_grad, a->grad.size() * sizeof(float));
-	  cudaMalloc(&b_grad, b->grad.size() * sizeof(float));
-	  cudaMalloc(&c_grad, c->grad.size() * sizeof(float));
-	
-	  cudaMalloc(&M, sizeof(int));
-	  cudaMalloc(&N, sizeof(int));
-	  cudaMalloc(&P, sizeof(int));
+ * Dense matrix multiplication layer.
+ */
+Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a), b(b), c(c), m(m), n(n), p(p)
+{
+    cudaMalloc(&a_data, a->data.size() * sizeof(float));
+    cudaMalloc(&b_data, b->data.size() * sizeof(float));
+    cudaMalloc(&c_data, c->data.size() * sizeof(float));
+
+    cudaMalloc(&a_grad, a->grad.size() * sizeof(float));
+    cudaMalloc(&b_grad, b->grad.size() * sizeof(float));
+    cudaMalloc(&c_grad, c->grad.size() * sizeof(float));
+
+    cudaMalloc(&M, sizeof(int));
+    cudaMalloc(&N, sizeof(int));
+    cudaMalloc(&P, sizeof(int));
 }
 
 __global__ void gpu_matmul_forward(float *a_gpu, float *b_gpu, float *c_gpu, int *m, int *n, int *p)
@@ -61,7 +62,8 @@ __global__ void gpu_matmul_forward(float *a_gpu, float *b_gpu, float *c_gpu, int
         c_gpu[i * (*p) + k] += a_gpu[i * (*n) + j] * b_gpu[j * (*p) + k];
 }
 
-void Matmul::forward(bool training) {
+void Matmul::forward(bool training)
+{
     timer_start(TMR_MATMUL_FW);
 
     CHECK(cudaMemcpy(a_data, &(a->data[0]), sizeof(float) * a->data.size(), cudaMemcpyHostToDevice));
@@ -70,26 +72,27 @@ void Matmul::forward(bool training) {
     CHECK(cudaMemcpy(M, &m, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(N, &n, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(P, &p, sizeof(int), cudaMemcpyHostToDevice));
-	
-	  dim3 blocksPerGrid(m, 1, 1);
+
+    dim3 blocksPerGrid(m, 1, 1);
     dim3 threadsPerBlock(p, 1, 1);
     gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a_data, b_data, c_data, M, N, P);
     CHECK_KERNELCALL();
-	  CHECK(cudaDeviceSynchronize());
-	
+    CHECK(cudaDeviceSynchronize());
+
     CHECK(cudaMemcpy(&c->data[0], c_data, sizeof(float) * c->data.size(), cudaMemcpyDeviceToHost));
     timer_stop(TMR_MATMUL_FW);
 }
 
 __global__ void gpu_matmul_backward1(float *a_grad, float *a_data, float *b_data, float *b_grad, float *c_grad, int *m, int *n, int *p)
 {
-	  int i = blockIdx.x;
+    int i = blockIdx.x;
     int j = threadIdx.x;
-	
-	  a_grad[i * (*n) + j] = 0;	
-	
-	  float tmp = 0;
-    for (int k = 0; k < *p; k++){
+
+    a_grad[i * (*n) + j] = 0;
+
+    float tmp = 0;
+    for (int k = 0; k < *p; k++)
+    {
         tmp += c_grad[i * (*p) + k] * b_data[j * (*p) + k];
     }
     a_grad[i * (*n) + j] = tmp;
@@ -97,18 +100,19 @@ __global__ void gpu_matmul_backward1(float *a_grad, float *a_data, float *b_data
 
 __global__ void gpu_matmul_backward2(float *a_grad, float *a_data, float *b_data, float *b_grad, float *c_grad, int *m, int *n, int *p)
 {
-	  int j = blockIdx.x;
+    int j = blockIdx.x;
     int k = threadIdx.x;
-    
-	  b_grad[j * (*p) + k] = 0;
-	
+
+    b_grad[j * (*p) + k] = 0;
+
     for (int i = 0; i < (*m); i++)
     {
-		  b_grad[j * (*p) + k] += c_grad[i * (*p) + k] * a_data[i * (*n) + j];
-	  }
+        b_grad[j * (*p) + k] += c_grad[i * (*p) + k] * a_data[i * (*n) + j];
+    }
 }
 
-void Matmul::backward() {
+void Matmul::backward()
+{
     timer_start(TMR_MATMUL_BW);
     CHECK(cudaMemcpy(a_grad, &(a->grad[0]), sizeof(float) * a->grad.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(a_data, &(a->data[0]), sizeof(float) * a->data.size(), cudaMemcpyHostToDevice));
@@ -118,20 +122,20 @@ void Matmul::backward() {
     CHECK(cudaMemcpy(M, &m, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(N, &n, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(P, &p, sizeof(int), cudaMemcpyHostToDevice));
-	
-	  dim3 blocksPerGrid1(m, 1, 1);
+
+    dim3 blocksPerGrid1(m, 1, 1);
     dim3 threadsPerBlock1(n, 1, 1);
     gpu_matmul_backward1<<<blocksPerGrid1, threadsPerBlock1>>>(a_grad, a_data, b_data, b_grad, c_grad, M, N, P);
-	  CHECK(cudaDeviceSynchronize());
-		
-	  dim3 blocksPerGrid2(n, 1, 1);
+    CHECK(cudaDeviceSynchronize());
+
+    dim3 blocksPerGrid2(n, 1, 1);
     dim3 threadsPerBlock2(p, 1, 1);
-	  gpu_matmul_backward2<<<blocksPerGrid2, threadsPerBlock2>>>(a_grad, a_data, b_data, b_grad, c_grad, M, N, P);
-	  CHECK(cudaDeviceSynchronize());
-		
-	  CHECK(cudaMemcpy(&a->grad[0], a_grad, sizeof(float) * a->grad.size(), cudaMemcpyDeviceToHost));
-	  CHECK(cudaMemcpy(&b->grad[0], b_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));
-	
+    gpu_matmul_backward2<<<blocksPerGrid2, threadsPerBlock2>>>(a_grad, a_data, b_data, b_grad, c_grad, M, N, P);
+    CHECK(cudaDeviceSynchronize());
+
+    CHECK(cudaMemcpy(&a->grad[0], a_grad, sizeof(float) * a->grad.size(), cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(&b->grad[0], b_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));
+
     /*a->zero_grad();
     b->zero_grad();
     for (int i = 0; i < m; i++)
@@ -145,10 +149,9 @@ void Matmul::backward() {
             }
             a->grad[i * n + j] = tmp;
         }*/
-	
+
     timer_stop(TMR_MATMUL_BW);
 }
-
 
 // ################################################################################################################
 
@@ -159,23 +162,24 @@ int *M2, *N2, *P2;
 
 /**
  * A sparse matrix multiplication layer.
-*/
+ */
 
-SparseMatmul::SparseMatmul(Variable *a, Variable *b, Variable *c, SparseIndex *sp, int m, int n, int p): a(a), b(b), c(c), sp(sp), m(m), n(n), p(p) {
-	  cudaMalloc(&a2_data, a->data.size() * sizeof(float));
-	  cudaMalloc(&b2_data, b->data.size() * sizeof(float));
-	  cudaMalloc(&c2_data, c->data.size() * sizeof(float));
-	
-	  cudaMalloc(&a2_grad, a->grad.size() * sizeof(float));
-	  cudaMalloc(&b2_grad, b->grad.size() * sizeof(float));
-	  cudaMalloc(&c2_grad, c->grad.size() * sizeof(float));
-	
-	  cudaMalloc(&sp_indptr, sp->indptr.size() * sizeof(float));
-	  cudaMalloc(&sp_indices, sp->indices.size() * sizeof(float));
-	
-	  cudaMalloc(&M2, sizeof(int));
-	  cudaMalloc(&N2, sizeof(int));
-	  cudaMalloc(&P2, sizeof(int));
+SparseMatmul::SparseMatmul(Variable *a, Variable *b, Variable *c, SparseIndex *sp, int m, int n, int p) : a(a), b(b), c(c), sp(sp), m(m), n(n), p(p)
+{
+    cudaMalloc(&a2_data, a->data.size() * sizeof(float));
+    cudaMalloc(&b2_data, b->data.size() * sizeof(float));
+    cudaMalloc(&c2_data, c->data.size() * sizeof(float));
+
+    cudaMalloc(&a2_grad, a->grad.size() * sizeof(float));
+    cudaMalloc(&b2_grad, b->grad.size() * sizeof(float));
+    cudaMalloc(&c2_grad, c->grad.size() * sizeof(float));
+
+    cudaMalloc(&sp_indptr, sp->indptr.size() * sizeof(float));
+    cudaMalloc(&sp_indices, sp->indices.size() * sizeof(float));
+
+    cudaMalloc(&M2, sizeof(int));
+    cudaMalloc(&N2, sizeof(int));
+    cudaMalloc(&P2, sizeof(int));
 }
 
 __global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c_data, int *sp_indptr, int *sp_indices, int *p)
@@ -183,7 +187,7 @@ __global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c
     int i = blockIdx.x;
     int k = threadIdx.x;
 
-	  c_data[i * (*p) + k] = 0;
+    c_data[i * (*p) + k] = 0;
 
     for (int jj = sp_indptr[i]; jj < sp_indptr[i + 1]; jj++)
     {
@@ -192,10 +196,11 @@ __global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c
     }
 }
 
-void SparseMatmul::forward(bool training) {
+void SparseMatmul::forward(bool training)
+{
     timer_start(TMR_SPMATMUL_FW);
-	
-	  CHECK(cudaMemcpy(sp_indptr, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
+
+    CHECK(cudaMemcpy(sp_indptr, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(sp_indices, &(sp->indices[0]), sizeof(int) * sp->indices.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(a2_data, &(a->data[0]), sizeof(float) * a->data.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(b2_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
@@ -203,17 +208,17 @@ void SparseMatmul::forward(bool training) {
     CHECK(cudaMemcpy(M2, &m, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(N2, &n, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(P2, &p, sizeof(int), cudaMemcpyHostToDevice));
-	
-	  dim3 blocksPerGrid(sp->indptr.size() - 1, 1, 1);
+
+    dim3 blocksPerGrid(sp->indptr.size() - 1, 1, 1);
     dim3 threadsPerBlock(p, 1, 1);
     gpu_sparse_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(a2_data, b2_data, c2_data, sp_indptr, sp_indices, P2);
     CHECK_KERNELCALL();
-	  CHECK(cudaDeviceSynchronize());
-	
+    CHECK(cudaDeviceSynchronize());
+
     CHECK(cudaMemcpy(&c->data[0], c2_data, sizeof(float) * c->data.size(), cudaMemcpyDeviceToHost));
     /*c->zero();
     for (int i = 0; i < sp->indptr.size() - 1; i++)
-        for (int jj = sp->indptr[i]; jj < sp->indptr[i + 1]; jj++) 
+        for (int jj = sp->indptr[i]; jj < sp->indptr[i + 1]; jj++)
         {
             int j = sp->indices[jj];
             for (int k = 0; k < p; k++)
@@ -227,19 +232,22 @@ __global__ void gpu_sparse_matmul_backward(float *a_data, float *b_grad, float *
     int jj = blockIdx.x;
     int k = threadIdx.x;
 
-	for (int i = 0; i < sp_indptr_size - 1; i++){
-		int j = sp_indices[jj];
-		if(j >= sp_indptr[i] && j < sp_indptr[i + 1]){
-			b_grad[j * (*p) + k] += c_grad[i * (*p) + k] * a_data[jj];
-		}
-	}
+    for (int i = 0; i < sp_indptr_size - 1; i++)
+    {
+        int j = sp_indices[jj];
+        if (j >= sp_indptr[i] && j < sp_indptr[i + 1])
+        {
+            b_grad[j * (*p) + k] += c_grad[i * (*p) + k] * a_data[jj];
+        }
+    }
 }
 
-void SparseMatmul::backward() {
+void SparseMatmul::backward()
+{
     timer_start(TMR_SPMATMUL_BW);
-	
-	// It doesn't work
-	/*CHECK(cudaMemcpy(sp_indptr, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
+
+    // It doesn't work
+    /*CHECK(cudaMemcpy(sp_indptr, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(sp_indices, &(sp->indices[0]), sizeof(int) * sp->indices.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(a2_data, &(a->data[0]), sizeof(float) * a->data.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(b2_grad, &(b->grad[0]), sizeof(float) * b->grad.size(), cudaMemcpyHostToDevice));
@@ -247,27 +255,28 @@ void SparseMatmul::backward() {
     CHECK(cudaMemcpy(M2, &m, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(N2, &n, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(P2, &p, sizeof(int), cudaMemcpyHostToDevice));
-	
-	  int max_sp_indptr = 0;
-	  for(int i = 0; i < sp->indptr.size(); i++){
-		    if(sp->indptr[i] > max_sp_indptr) max_sp_indptr = sp->indptr[i];
+
+      int max_sp_indptr = 0;
+      for(int i = 0; i < sp->indptr.size(); i++){
+            if(sp->indptr[i] > max_sp_indptr) max_sp_indptr = sp->indptr[i];
     }
-	
-	  dim3 blocksPerGrid(max_sp_indptr, 1, 1);
+
+      dim3 blocksPerGrid(max_sp_indptr, 1, 1);
     dim3 threadsPerBlock(p, 1, 1);
     gpu_sparse_matmul_backward<<<blocksPerGrid, threadsPerBlock>>>(a2_data, b2_grad, c2_grad, sp_indptr, sp_indices, P2, sp->indptr.size());
     CHECK_KERNELCALL();
-	  CHECK(cudaDeviceSynchronize());
-	
-	  CHECK(cudaMemcpy(&b->grad[0], b2_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));*/
-	
+      CHECK(cudaDeviceSynchronize());
+
+      CHECK(cudaMemcpy(&b->grad[0], b2_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));*/
+
     b->zero_grad();
     int row = 0;
     for (int i = 0; i < sp->indptr.size() - 1; i++)
-        for (int jj = sp->indptr[i]; jj < sp->indptr[i + 1]; jj++) {
+        for (int jj = sp->indptr[i]; jj < sp->indptr[i + 1]; jj++)
+        {
             int j = sp->indices[jj];
             for (int k = 0; k < p; k++)
-                    b->grad[j * p + k] += c->grad[i * p + k] * a->data[jj];
+                b->grad[j * p + k] += c->grad[i * p + k] * a->data[jj];
         }
     timer_stop(TMR_SPMATMUL_BW);
 }
@@ -276,8 +285,9 @@ void SparseMatmul::backward() {
 
 /**
  * A specialized sparse matrix multiplication for graphs.
-*/
-GraphSum::GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim): in(in), out(out), graph(graph), dim(dim) {
+ */
+GraphSum::GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim) : in(in), out(out), graph(graph), dim(dim)
+{
 }
 
 // Still not tested
@@ -285,25 +295,27 @@ __global__ void gpu_graphsum_forward(float *in_data, float *out_data, float *gra
 {
     int src = blockIdx.x;
     int j = threadIdx.x;
-	
-	out_data[src * (*dim) + j] = 0;
-	
-	for (int i = graph_indptr[src]; i < graph_indptr[src + 1]; i++){
+
+    out_data[src * (*dim) + j] = 0;
+
+    for (int i = graph_indptr[src]; i < graph_indptr[src + 1]; i++)
+    {
         int dst = graph_indices[i];
         float coef = 1.0 / sqrtf((graph_indptr[src + 1] - graph_indptr[src]) * (graph_indptr[dst + 1] - graph_indptr[dst]));
-		out_data[src * (*dim) + j] += coef * in_data[dst * (*dim) + j];
-	}
+        out_data[src * (*dim) + j] += coef * in_data[dst * (*dim) + j];
+    }
 }
 
-void GraphSum::forward(bool training) {
+void GraphSum::forward(bool training)
+{
     timer_start(TMR_GRAPHSUM_FW);
     out->zero();
     for (int src = 0; src < graph->indptr.size() - 1; src++)
-        for (int i = graph->indptr[src]; i < graph->indptr[src + 1]; i++) {
+        for (int i = graph->indptr[src]; i < graph->indptr[src + 1]; i++)
+        {
             int dst = graph->indices[i];
             float coef = 1.0 / sqrtf(
-                    (graph->indptr[src + 1] - graph->indptr[src]) * (graph->indptr[dst + 1] - graph->indptr[dst])
-            );
+                                   (graph->indptr[src + 1] - graph->indptr[src]) * (graph->indptr[dst + 1] - graph->indptr[dst]));
             for (int j = 0; j < dim; j++)
                 // This only works for undirected graphs. Should be out[dst] += coef * in[src]
                 out->data[src * dim + j] += coef * in->data[dst * dim + j];
@@ -311,30 +323,32 @@ void GraphSum::forward(bool training) {
     timer_stop(TMR_GRAPHSUM_FW);
 }
 
-//Still not tested
+// Still not tested
 __global__ void gpu_graphsum_backward(float *in_grad, float *out_grad, float *graph_indptr, float *graph_indices, int *dim)
 {
     int src = blockIdx.x;
     int j = threadIdx.x;
-	
-	out_grad[src * (*dim) + j] = 0;
-	
-	for (int i = graph_indptr[src]; i < graph_indptr[src + 1]; i++){
-		int dst = graph_indices[i];
+
+    out_grad[src * (*dim) + j] = 0;
+
+    for (int i = graph_indptr[src]; i < graph_indptr[src + 1]; i++)
+    {
+        int dst = graph_indices[i];
         float coef = 1.0 / sqrtf((graph_indptr[src + 1] - graph_indptr[src]) * (graph_indptr[dst + 1] - graph_indptr[dst]));
-		in_grad[src * (*dim) + j] += coef * out_grad[dst * (*dim) + j];
-	}
+        in_grad[src * (*dim) + j] += coef * out_grad[dst * (*dim) + j];
+    }
 }
 
-void GraphSum::backward() {
+void GraphSum::backward()
+{
     timer_start(TMR_GRAPHSUM_BW);
     in->zero_grad();
     for (int src = 0; src < graph->indptr.size() - 1; src++)
-        for (int i = graph->indptr[src]; i < graph->indptr[src + 1]; i++) {
+        for (int i = graph->indptr[src]; i < graph->indptr[src + 1]; i++)
+        {
             int dst = graph->indices[i];
             float coef = 1.0 / sqrtf(
-                    (graph->indptr[src + 1] - graph->indptr[src]) * (graph->indptr[dst + 1] - graph->indptr[dst])
-            );
+                                   (graph->indptr[src + 1] - graph->indptr[src]) * (graph->indptr[dst + 1] - graph->indptr[dst]));
             for (int j = 0; j < dim; j++)
                 in->grad[src * dim + j] += coef * out->grad[dst * dim + j];
         }
@@ -345,31 +359,37 @@ void GraphSum::backward() {
 
 /**
  * Each predicted class probability is compared to the actual class desired and a loss is computed to penalize the proabability based on how far it is with respect to the actual expected value.
- * Also called logaritmic loss. 
-*/
-CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth, float *loss, int num_classes) :
-        logits(logits), truth(truth), loss(loss), num_classes(num_classes) {}
+ * Also called logaritmic loss.
+ */
+CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth, float *loss, int num_classes) : logits(logits), truth(truth), loss(loss), num_classes(num_classes) {}
 
-void CrossEntropyLoss::forward(bool training) {
+void CrossEntropyLoss::forward(bool training)
+{
     timer_start(TMR_LOSS_FW);
     float total_loss = 0;
     int count = 0;
-    if (training) logits->zero_grad();
-    for (int i = 0; i < logits->data.size() / num_classes; i++) {
-        if (truth[i] < 0) continue;
+    if (training)
+        logits->zero_grad();
+    for (int i = 0; i < logits->data.size() / num_classes; i++)
+    {
+        if (truth[i] < 0)
+            continue;
         count++;
         float *logit = &logits->data[i * num_classes];
         float max_logit = -1e30, sum_exp = 0;
         for (int j = 0; j < num_classes; j++)
             max_logit = fmax(max_logit, logit[j]);
-        for (int j = 0; j < num_classes; j++) {
+        for (int j = 0; j < num_classes; j++)
+        {
             logit[j] -= max_logit;
             sum_exp += expf(logit[j]);
         }
         total_loss += logf(sum_exp) - logit[truth[i]];
 
-        if (training) {
-            for (int j = 0; j < num_classes; j++) {
+        if (training)
+        {
+            for (int j = 0; j < num_classes; j++)
+            {
                 float prob = expf(logit[j]) / sum_exp;
                 logits->grad[i * num_classes + j] = prob;
             }
@@ -378,12 +398,13 @@ void CrossEntropyLoss::forward(bool training) {
     }
     *loss = total_loss / count;
     if (training)
-        for (float & i : logits->grad)
+        for (float &i : logits->grad)
             i /= count;
     timer_stop(TMR_LOSS_FW);
 }
 
-void CrossEntropyLoss::backward() {
+void CrossEntropyLoss::backward()
+{
 }
 
 // ################################################################################################################
@@ -391,66 +412,84 @@ void CrossEntropyLoss::backward() {
 /**
  * Rectified Linear Unit activation function.
  * If input is negative it will output 0.
-*/
-ReLU::ReLU(Variable *in) {
+ */
+ReLU::ReLU(Variable *in)
+{
     this->in = in;
     mask = new bool[in->data.size()];
 }
 
-ReLU::~ReLU() {
+ReLU::~ReLU()
+{
     delete[] mask;
 }
 
-void ReLU::forward(bool training) {
+void ReLU::forward(bool training)
+{
     timer_start(TMR_RELU_FW);
-    for (int i = 0; i < in->data.size(); i++) {
+    for (int i = 0; i < in->data.size(); i++)
+    {
         bool keep = in->data[i] > 0;
-        if (training) mask[i] = keep;
-        if (!keep) in->data[i] = 0;
+        if (training)
+            mask[i] = keep;
+        if (!keep)
+            in->data[i] = 0;
     }
     timer_stop(TMR_RELU_FW);
 }
 
-void ReLU::backward() {
+void ReLU::backward()
+{
     timer_start(TMR_RELU_BW);
     for (int i = 0; i < in->data.size(); i++)
-        if (!mask[i]) in->grad[i] = 0;
+        if (!mask[i])
+            in->grad[i] = 0;
     timer_stop(TMR_RELU_BW);
 }
 
 // ################################################################################################################
 
 /**
- * The dropout layer randomly sets input units to 0 with a frequency of P at each step during training time to prevent overfitting. 
+ * The dropout layer randomly sets input units to 0 with a frequency of P at each step during training time to prevent overfitting.
  * Inputs that are not set to 0 are scaled up by 1/(1-P).
-*/
-Dropout::Dropout(Variable *in, float p) {
+ */
+Dropout::Dropout(Variable *in, float p)
+{
     this->in = in;
     this->p = p;
-    if (!in->grad.empty()) 
+    if (!in->grad.empty())
         mask = new int[in->data.size()];
-    else mask = nullptr;
+    else
+        mask = nullptr;
 }
 
-Dropout::~Dropout() {
-    if (mask) delete[] mask;
+Dropout::~Dropout()
+{
+    if (mask)
+        delete[] mask;
 }
 
-void Dropout::forward(bool training) {
-    if (!training) return;
+void Dropout::forward(bool training)
+{
+    if (!training)
+        return;
     timer_start(TMR_DROPOUT_FW);
     const int threshold = int(p * MY_RAND_MAX);
     float scale = 1 / (1 - p);
-    for (int i = 0; i < in->data.size(); i++) {
+    for (int i = 0; i < in->data.size(); i++)
+    {
         bool keep = (int)RAND() >= threshold;
         in->data[i] *= keep ? scale : 0;
-        if (mask) mask[i] = keep;
+        if (mask)
+            mask[i] = keep;
     }
     timer_stop(TMR_DROPOUT_FW);
 }
 
-void Dropout::backward() {
-    if (!mask) return;
+void Dropout::backward()
+{
+    if (!mask)
+        return;
     timer_start(TMR_DROPOUT_BW);
     float scale = 1 / (1 - p);
     for (int i = 0; i < in->data.size(); i++)
