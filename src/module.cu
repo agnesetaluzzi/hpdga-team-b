@@ -297,6 +297,7 @@ int *Dim2;
 
 int call_forward = 0;
 int call_backward = 1;
+
 /**
  * A specialized sparse matrix multiplication for graphs.
  */
@@ -398,7 +399,6 @@ __global__ void gpu_graph_sum_backward(float *in_grad, float *out_grad, int *gra
     int j = threadIdx.x;
 
     in_grad[src * (*dim) + j] = 0;
-
     for (int i = graph_indptr[src]; i < graph_indptr[src + 1]; i++)
     {
         int dst = graph_indices[i];
@@ -411,7 +411,6 @@ __global__ void gpu_graph_sum_backward(float *in_grad, float *out_grad, int *gra
 void GraphSum::backward()
 {
     timer_start(TMR_GRAPHSUM_BW);
-
     if (call_backward == 0)
     {
         CHECK(cudaMemcpy(graph_indptr, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
@@ -462,16 +461,88 @@ void GraphSum::backward()
 
 // ################################################################################################################
 
+float *logits_data, *logits_grad;
+int *truth_gpu;
+float *loss_gpu;
+
 /**
  * Each predicted class probability is compared to the actual class desired and a loss is computed to penalize the proabability based on how far it is with respect to the actual expected value.
  * Also called logaritmic loss.
  */
-CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth, float *loss, int num_classes) : logits(logits), truth(truth), loss(loss), num_classes(num_classes) {}
+CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth, float *loss, int num_classes) : logits(logits), truth(truth), loss(loss), num_classes(num_classes) {
+	cudaMalloc(&logits_data, logits->data.size() * sizeof(float));
+	cudaMalloc(&logits_grad, logits->grad.size() * sizeof(float));
+	//FIXME
+	cudaMalloc(&truth_gpu, sizeof(int) * 2708);
+	cudaMalloc(&loss_gpu, sizeof(loss));
+}
+
+__global__ void gpu_entropy_loss(float *logits_data, float *logits_grad, int *truth, float *loss, const int num_classes, const bool training, const int logits_data_size, const int logits_grad_size){
+    float total_loss = 0;
+    int count = 0;
+    if (training){
+        //logits->zero_grad();
+		for(int i = 0; i < logits_grad_size; i++) {
+			logits_grad[i] = 0;
+		}
+	}
+    for (int i = 0; i < logits_data_size / num_classes; i++)
+    {
+        if (truth[i] < 0)
+            continue;
+        count++;
+        float *logit = &logits_data[i * num_classes];
+        float max_logit = -1e30, sum_exp = 0;
+        for (int j = 0; j < num_classes; j++)
+            max_logit = fmax(max_logit, logit[j]);
+        for (int j = 0; j < num_classes; j++)
+        {
+            logit[j] -= max_logit;
+            sum_exp += expf(logit[j]);
+        }
+        total_loss += logf(sum_exp) - logit[truth[i]];
+
+        if (training)
+        {
+            for (int j = 0; j < num_classes; j++)
+            {
+                float prob = expf(logit[j]) / sum_exp;
+                logits_grad[i * (num_classes) + j] = prob;
+            }
+            logits_grad[i * (num_classes) + truth[i]] -= 1.0;
+        }
+    }
+    *loss = total_loss / count;
+    if (training)
+		for(int i = 0; i < logits_grad_size; i++){
+			logits_grad[i] /= count;
+		}
+        //for (float &i : logits_grad)
+            //i /= count;
+}
 
 void CrossEntropyLoss::forward(bool training)
 {
     timer_start(TMR_LOSS_FW);
-    float total_loss = 0;
+	
+	CHECK(cudaMemcpy(logits_data, &(logits->data[0]), sizeof(float) * logits->data.size(), cudaMemcpyHostToDevice));
+	CHECK(cudaMemcpy(logits_grad, &(logits->grad[0]), sizeof(float) * logits->grad.size(), cudaMemcpyHostToDevice));
+	CHECK(cudaMemcpy(truth_gpu, truth, sizeof(int) * 2708, cudaMemcpyHostToDevice));
+	CHECK(cudaMemcpy(loss_gpu, loss, sizeof(loss), cudaMemcpyHostToDevice));
+	
+	//std::cout << sizeof(truth) <<"\n";
+	//std::cout << sizeof(loss) <<"\n";
+	//std::cout << num_classes <<"\n";
+		
+	dim3 blocksPerGrid(1, 1, 1);
+    dim3 threadsPerBlock(1, 1, 1);
+    gpu_entropy_loss<<<blocksPerGrid, threadsPerBlock>>>(logits_data, logits_grad, truth_gpu, loss_gpu, num_classes, training, logits->data.size(), logits->grad.size());
+    CHECK_KERNELCALL();
+    CHECK(cudaDeviceSynchronize());
+	
+	CHECK(cudaMemcpy(&logits->grad[0], logits_grad, sizeof(float) * logits->grad.size(), cudaMemcpyDeviceToHost));
+	
+    /*float total_loss = 0;
     int count = 0;
     if (training)
         logits->zero_grad();
@@ -504,7 +575,7 @@ void CrossEntropyLoss::forward(bool training)
     *loss = total_loss / count;
     if (training)
         for (float &i : logits->grad)
-            i /= count;
+            i /= count;*/
     timer_stop(TMR_LOSS_FW);
 }
 
@@ -514,6 +585,9 @@ void CrossEntropyLoss::backward()
 
 // ################################################################################################################
 
+float *in_data3, *in_grad3;
+bool *mask_gpu;
+
 /**
  * Rectified Linear Unit activation function.
  * If input is negative it will output 0.
@@ -522,6 +596,10 @@ ReLU::ReLU(Variable *in)
 {
     this->in = in;
     mask = new bool[in->data.size()];
+	
+	cudaMalloc(&in_data3, in->data.size() * sizeof(float));
+	cudaMalloc(&in_grad3, in->grad.size() * sizeof(float));
+	cudaMalloc(&mask_gpu, in->data.size() * sizeof(bool));
 }
 
 ReLU::~ReLU()
@@ -529,26 +607,67 @@ ReLU::~ReLU()
     delete[] mask;
 }
 
+__global__ void gpu_relu_forward(float *in_data, bool *mask, const bool training){
+	int i = blockIdx.x;
+	
+    bool keep = in_data[i] > 0;
+    if (training)
+        mask[i] = keep;
+    if (!keep)
+        in_data[i] = 0;	
+}
+
 void ReLU::forward(bool training)
 {
     timer_start(TMR_RELU_FW);
-    for (int i = 0; i < in->data.size(); i++)
+	
+	CHECK(cudaMemcpy(in_data3, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+	
+	dim3 blocksPerGrid(in->data.size(), 1, 1);
+    dim3 threadsPerBlock(1, 1, 1);
+    gpu_relu_forward<<<blocksPerGrid, threadsPerBlock>>>(in_data3, mask_gpu, training);
+    CHECK_KERNELCALL();
+    CHECK(cudaDeviceSynchronize());
+	
+	CHECK(cudaMemcpy(&in->data[0], in_data3, sizeof(float) * in->data.size(), cudaMemcpyDeviceToHost));
+	CHECK(cudaMemcpy(mask, mask_gpu, in->data.size() * sizeof(bool), cudaMemcpyDeviceToHost));
+	
+    /*for (int i = 0; i < in->data.size(); i++)
     {
         bool keep = in->data[i] > 0;
         if (training)
             mask[i] = keep;
         if (!keep)
             in->data[i] = 0;
-    }
+    }*/
     timer_stop(TMR_RELU_FW);
+}
+
+__global__ void gpu_relu_backward(float *in_grad, bool *mask){
+	int i = blockIdx.x;
+	
+    if (!mask[i])
+        in_grad[i] = 0;
 }
 
 void ReLU::backward()
 {
     timer_start(TMR_RELU_BW);
-    for (int i = 0; i < in->data.size(); i++)
+	
+	CHECK(cudaMemcpy(in_grad3, &(in->grad[0]), sizeof(float) * in->grad.size(), cudaMemcpyHostToDevice));
+	CHECK(cudaMemcpy(mask_gpu, mask, in->data.size() * sizeof(bool), cudaMemcpyHostToDevice));
+	
+	dim3 blocksPerGrid(in->data.size(), 1, 1);
+    dim3 threadsPerBlock(1, 1, 1);
+    gpu_relu_backward<<<blocksPerGrid, threadsPerBlock>>>(in_grad3, mask_gpu);
+    CHECK_KERNELCALL();
+    CHECK(cudaDeviceSynchronize());
+	
+	CHECK(cudaMemcpy(&in->grad[0], in_grad3, sizeof(float) * in->grad.size(), cudaMemcpyDeviceToHost));
+	
+    /*for (int i = 0; i < in->data.size(); i++)
         if (!mask[i])
-            in->grad[i] = 0;
+            in->grad[i] = 0;*/
     timer_stop(TMR_RELU_BW);
 }
 
