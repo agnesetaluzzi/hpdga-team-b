@@ -227,18 +227,28 @@ void SparseMatmul::forward(bool training)
     timer_stop(TMR_SPMATMUL_FW);
 }
 
-__global__ void gpu_sparse_matmul_backward(float *a_data, float *b_grad, float *c_grad, int *sp_indptr, int *sp_indices, int *p, int sp_indptr_size)
+__device__ void gpu_zero_grad(float *b_grad) {
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    b_grad[index] = 0;
+}
+
+__global__ void gpu_sparse_matmul_backward(float *a_data, float *b_grad, float *c_grad, int *sp_indptr, int *sp_indices, int *p, const int sp_indptr_size)
 {
-    int jj = blockIdx.x;
+    int i = blockIdx.x;
     int k = threadIdx.x;
 
-    for (int i = 0; i < sp_indptr_size - 1; i++)
+    if (blockIdx.x == 0)
+    {
+        for (int j = 0; j < sizeof(b_grad) / sizeof(float) / (*p); j++)
+        {
+            b_grad[j * (*p) + k] = 0;
+        }
+    }
+
+    for (int jj = sp_indptr[i]; jj < sp_indptr[i + 1]; jj++)
     {
         int j = sp_indices[jj];
-        if (j >= sp_indptr[i] && j < sp_indptr[i + 1])
-        {
-            b_grad[j * (*p) + k] += c_grad[i * (*p) + k] * a_data[jj];
-        }
+        atomicAdd(&b_grad[j * (*p) + k], c_grad[i * (*p) + k] * a_data[jj]);
     }
 }
 
@@ -246,8 +256,7 @@ void SparseMatmul::backward()
 {
     timer_start(TMR_SPMATMUL_BW);
 
-    // It doesn't work
-    /*CHECK(cudaMemcpy(sp_indptr, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(sp_indptr, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(sp_indices, &(sp->indices[0]), sizeof(int) * sp->indices.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(a2_data, &(a->data[0]), sizeof(float) * a->data.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(b2_grad, &(b->grad[0]), sizeof(float) * b->grad.size(), cudaMemcpyHostToDevice));
@@ -256,28 +265,21 @@ void SparseMatmul::backward()
     CHECK(cudaMemcpy(N2, &n, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(P2, &p, sizeof(int), cudaMemcpyHostToDevice));
 
-      int max_sp_indptr = 0;
-      for(int i = 0; i < sp->indptr.size(); i++){
-            if(sp->indptr[i] > max_sp_indptr) max_sp_indptr = sp->indptr[i];
-    }
-
-      dim3 blocksPerGrid(max_sp_indptr, 1, 1);
+    dim3 blocksPerGrid(sp->indptr.size() - 1, 1, 1);
     dim3 threadsPerBlock(p, 1, 1);
     gpu_sparse_matmul_backward<<<blocksPerGrid, threadsPerBlock>>>(a2_data, b2_grad, c2_grad, sp_indptr, sp_indices, P2, sp->indptr.size());
     CHECK_KERNELCALL();
-      CHECK(cudaDeviceSynchronize());
+    CHECK(cudaDeviceSynchronize());
 
-      CHECK(cudaMemcpy(&b->grad[0], b2_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));*/
+    CHECK(cudaMemcpy(&b->grad[0], b2_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));
 
-    b->zero_grad();
-    int row = 0;
-    for (int i = 0; i < sp->indptr.size() - 1; i++)
+    /* for (int i = 0; i < sp->indptr.size() - 1; i++)
         for (int jj = sp->indptr[i]; jj < sp->indptr[i + 1]; jj++)
         {
             int j = sp->indices[jj];
             for (int k = 0; k < p; k++)
                 b->grad[j * p + k] += c->grad[i * p + k] * a->data[jj];
-        }
+        }  */
     timer_stop(TMR_SPMATMUL_BW);
 }
 
@@ -301,25 +303,27 @@ int call_backward = 1;
  */
 GraphSum::GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim) : in(in), out(out), graph(graph), dim(dim)
 {
-	if(call_forward == 0){
-	    cudaMalloc(&in_data, in->data.size() * sizeof(float));
-		cudaMalloc(&out_data, out->data.size() * sizeof(float));
-		cudaMalloc(&in_grad, in->grad.size() * sizeof(float));
-		cudaMalloc(&out_grad, out->grad.size() * sizeof(float));	
-		cudaMalloc(&graph_indptr, graph->indptr.size() * sizeof(int));
-		cudaMalloc(&graph_indices, graph->indices.size() * sizeof(int));
-		cudaMalloc(&Dim, sizeof(int));	
-	}else{
-	    cudaMalloc(&in_data2, in->data.size() * sizeof(float));
-		cudaMalloc(&out_data2, out->data.size() * sizeof(float));
-		cudaMalloc(&in_grad2, in->grad.size() * sizeof(float));
-		cudaMalloc(&out_grad2, out->grad.size() * sizeof(float));	
-		cudaMalloc(&graph_indptr2, graph->indptr.size() * sizeof(int));
-		cudaMalloc(&graph_indices2, graph->indices.size() * sizeof(int));
-		cudaMalloc(&Dim2, sizeof(int));			
-	}
-	call_forward += 1;
-	call_forward %= 2;
+    if(call_forward == 0)
+    {
+        cudaMalloc(&in_data, in->data.size() * sizeof(float));
+        cudaMalloc(&out_data, out->data.size() * sizeof(float));
+        cudaMalloc(&in_grad, in->grad.size() * sizeof(float));
+        cudaMalloc(&out_grad, out->grad.size() * sizeof(float));
+        cudaMalloc(&graph_indptr, graph->indptr.size() * sizeof(int));
+        cudaMalloc(&graph_indices, graph->indices.size() * sizeof(int));
+        cudaMalloc(&Dim, sizeof(int));
+    }
+    else{
+        cudaMalloc(&in_data2, in->data.size() * sizeof(float));
+        cudaMalloc(&out_data2, out->data.size() * sizeof(float));
+        cudaMalloc(&in_grad2, in->grad.size() * sizeof(float));
+        cudaMalloc(&out_grad2, out->grad.size() * sizeof(float));
+        cudaMalloc(&graph_indptr2, graph->indptr.size() * sizeof(int));
+        cudaMalloc(&graph_indices2, graph->indices.size() * sizeof(int));
+        cudaMalloc(&Dim2, sizeof(int));
+    }
+    call_forward += 1;
+    call_forward %= 2;
 }
 
 __global__ void gpu_graph_sum_forward(float *in_data, float *out_data, int *graph_indptr, int *graph_indices, int *dim)
@@ -340,42 +344,41 @@ __global__ void gpu_graph_sum_forward(float *in_data, float *out_data, int *grap
 void GraphSum::forward(bool training)
 {
     timer_start(TMR_GRAPHSUM_FW);
-	
-	//std::cout << call <<"\n";
-	
-	if(call_forward == 0){
-		CHECK(cudaMemcpy(graph_indptr, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(graph_indices, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(in_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(out_data, &(out->data[0]), sizeof(float) * out->data.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(Dim, &dim, sizeof(int), cudaMemcpyHostToDevice));
-	
-		dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
-		dim3 threadsPerBlock(dim, 1, 1);
-		gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(in_data, out_data, graph_indptr, graph_indices, Dim);
-		CHECK_KERNELCALL();
-		CHECK(cudaDeviceSynchronize());
-		
-		CHECK(cudaMemcpy(&out->data[0], out_data, sizeof(float) * out->data.size(), cudaMemcpyDeviceToHost));
-	}else{
-		CHECK(cudaMemcpy(graph_indptr2, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(graph_indices2, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(in_data2, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(out_data2, &(out->data[0]), sizeof(float) * out->data.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(Dim2, &dim, sizeof(int), cudaMemcpyHostToDevice));
-		
-		dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
-		dim3 threadsPerBlock(dim, 1, 1);
-		gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(in_data2, out_data2, graph_indptr2, graph_indices2, Dim2);
-		CHECK_KERNELCALL();
-		CHECK(cudaDeviceSynchronize());
-		
-		CHECK(cudaMemcpy(&out->data[0], out_data2, sizeof(float) * out->data.size(), cudaMemcpyDeviceToHost));
-	}
-	
-	call_forward++;
-	call_forward %= 2;
-	
+    if(call_forward == 0)
+    {
+        CHECK(cudaMemcpy(graph_indptr, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(graph_indices, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(in_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(out_data, &(out->data[0]), sizeof(float) * out->data.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(Dim, &dim, sizeof(int), cudaMemcpyHostToDevice));
+
+        dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
+        dim3 threadsPerBlock(dim, 1, 1);
+        gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(in_data, out_data, graph_indptr, graph_indices, Dim);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+
+        CHECK(cudaMemcpy(&out->data[0], out_data, sizeof(float) * out->data.size(), cudaMemcpyDeviceToHost));
+    } else
+    {
+        CHECK(cudaMemcpy(graph_indptr2, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(graph_indices2, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(in_data2, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(out_data2, &(out->data[0]), sizeof(float) * out->data.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(Dim2, &dim, sizeof(int), cudaMemcpyHostToDevice));
+
+        dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
+        dim3 threadsPerBlock(dim, 1, 1);
+        gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(in_data2, out_data2, graph_indptr2, graph_indices2, Dim2);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+
+        CHECK(cudaMemcpy(&out->data[0], out_data2, sizeof(float) * out->data.size(), cudaMemcpyDeviceToHost));  
+    }
+
+    call_forward++;
+    call_forward %= 2;
+
     /*out->zero();
     for (int src = 0; src < graph->indptr.size() - 1; src++)
         for (int i = graph->indptr[src]; i < graph->indptr[src + 1]; i++)
@@ -387,66 +390,64 @@ void GraphSum::forward(bool training)
                 // This only works for undirected graphs. Should be out[dst] += coef * in[src]
                 out->data[src * dim + j] += coef * in->data[dst * dim + j];
         }*/
-	timer_stop(TMR_GRAPHSUM_FW);
+    timer_stop(TMR_GRAPHSUM_FW);
 }
 
-// Still not tested
 __global__ void gpu_graph_sum_backward(float *in_grad, float *out_grad, int *graph_indptr, int *graph_indices, int *dim)
 {
     int src = blockIdx.x;
     int j = threadIdx.x;
 
-    out_grad[src * (*dim) + j] = 0;
-
-	for (int i = graph_indptr[src]; i < graph_indptr[src + 1]; i++){
-		int dst = graph_indices[i];
+    in_grad[src * (*dim) + j] = 0;
+    for (int i = graph_indptr[src]; i < graph_indptr[src + 1]; i++)
+    {
+        int dst = graph_indices[i];
         float coef = 1.0 / sqrtf(
-                                (graph_indptr[src + 1] - graph_indptr[src]) * (graph_indptr[dst + 1] - graph_indptr[dst]));
-		in_grad[src * (*dim) + j] += coef * out_grad[dst * (*dim) + j];
-	}
+                               (graph_indptr[src + 1] - graph_indptr[src]) * (graph_indptr[dst + 1] - graph_indptr[dst]));
+        in_grad[src * (*dim) + j] += coef * out_grad[dst * (*dim) + j];
+    }
 }
 
 void GraphSum::backward()
 {
     timer_start(TMR_GRAPHSUM_BW);
-	
-	//std::cout << call <<"\n";
-	
-	/*if(call_backward == 0){
-		CHECK(cudaMemcpy(graph_indptr, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(graph_indices, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(in_grad, &(in->grad[0]), sizeof(float) * in->grad.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(out_grad, &(out->grad[0]), sizeof(float) * out->grad.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(Dim, &dim, sizeof(int), cudaMemcpyHostToDevice));
-	
-		dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
-		dim3 threadsPerBlock(dim, 1, 1);
-		gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(in_grad, out_grad, graph_indptr, graph_indices, Dim);
-		CHECK_KERNELCALL();
-		CHECK(cudaDeviceSynchronize());
-		
-		CHECK(cudaMemcpy(&in->grad[0], in_grad, sizeof(float) * in->grad.size(), cudaMemcpyDeviceToHost));
-	}else{
-		CHECK(cudaMemcpy(graph_indptr2, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(graph_indices2, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(in_grad2, &(in->grad[0]), sizeof(float) * in->grad.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(out_grad2, &(out->grad[0]), sizeof(float) * out->grad.size(), cudaMemcpyHostToDevice));
-		CHECK(cudaMemcpy(Dim2, &dim, sizeof(int), cudaMemcpyHostToDevice));
-		
-		dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
-		dim3 threadsPerBlock(dim, 1, 1);
-		gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(in_grad2, out_grad2, graph_indptr2, graph_indices2, Dim2);
-		CHECK_KERNELCALL();
-		CHECK(cudaDeviceSynchronize());
-		
-		CHECK(cudaMemcpy(&in->grad[0], in_grad2, sizeof(float) * in->grad.size(), cudaMemcpyDeviceToHost));
-	}
-	
-	call_backward++;
-	call_backward %= 2;*/
-	
-    in->zero_grad();
-    for (int src = 0; src < graph->indptr.size() - 1; src++)
+    if (call_backward == 0)
+    {
+        CHECK(cudaMemcpy(graph_indptr, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(graph_indices, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(in_grad, &(in->grad[0]), sizeof(float) * in->grad.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(out_grad, &(out->grad[0]), sizeof(float) * out->grad.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(Dim, &dim, sizeof(int), cudaMemcpyHostToDevice));
+
+        dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
+        dim3 threadsPerBlock(dim, 1, 1);
+        gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(in_grad, out_grad, graph_indptr, graph_indices, Dim);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+
+        CHECK(cudaMemcpy(&in->grad[0], in_grad, sizeof(float) * in->grad.size(), cudaMemcpyDeviceToHost));
+    } else
+    {
+        CHECK(cudaMemcpy(graph_indptr2, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(graph_indices2, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(in_grad2, &(in->grad[0]), sizeof(float) * in->grad.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(out_grad2, &(out->grad[0]), sizeof(float) * out->grad.size(), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(Dim2, &dim, sizeof(int), cudaMemcpyHostToDevice));
+
+        dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
+        dim3 threadsPerBlock(dim, 1, 1);
+        gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(in_grad2, out_grad2, graph_indptr2, graph_indices2, Dim2);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+
+        CHECK(cudaMemcpy(&in->grad[0], in_grad2, sizeof(float) * in->grad.size(), cudaMemcpyDeviceToHost));
+    }
+
+    call_backward++;
+    call_backward %= 2;
+
+    //in->zero_grad();
+    /*for (int src = 0; src < graph->indptr.size() - 1; src++)
         for (int i = graph->indptr[src]; i < graph->indptr[src + 1]; i++)
         {
             int dst = graph->indices[i];
@@ -454,7 +455,7 @@ void GraphSum::backward()
                                     (graph->indptr[src + 1] - graph->indptr[src]) * (graph->indptr[dst + 1] - graph->indptr[dst]));
             for (int j = 0; j < dim; j++)
                 in->grad[src * dim + j] += coef * out->grad[dst * dim + j];
-        }
+        }*/
     timer_stop(TMR_GRAPHSUM_BW);
 }
 
