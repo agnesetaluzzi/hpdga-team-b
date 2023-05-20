@@ -227,23 +227,10 @@ void SparseMatmul::forward(bool training)
     timer_stop(TMR_SPMATMUL_FW);
 }
 
-__device__ void gpu_zero_grad(float *b_grad) {
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    b_grad[index] = 0;
-}
-
 __global__ void gpu_sparse_matmul_backward(float *a_data, float *b_grad, float *c_grad, int *sp_indptr, int *sp_indices, int *p, const int sp_indptr_size)
 {
     int i = blockIdx.x;
     int k = threadIdx.x;
-
-    if (blockIdx.x == 0)
-    {
-        for (int j = 0; j < sizeof(b_grad) / sizeof(float) / (*p); j++)
-        {
-            b_grad[j * (*p) + k] = 0;
-        }
-    }
 
     for (int jj = sp_indptr[i]; jj < sp_indptr[i + 1]; jj++)
     {
@@ -259,7 +246,7 @@ void SparseMatmul::backward()
     CHECK(cudaMemcpy(sp_indptr, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(sp_indices, &(sp->indices[0]), sizeof(int) * sp->indices.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(a2_data, &(a->data[0]), sizeof(float) * a->data.size(), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(b2_grad, &(b->grad[0]), sizeof(float) * b->grad.size(), cudaMemcpyHostToDevice));
+    CHECK(cudaMemset(b2_grad, 0, sizeof(float) * b->grad.size()));
     CHECK(cudaMemcpy(c2_grad, &(c->grad[0]), sizeof(float) * c->grad.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(M2, &m, sizeof(int), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(N2, &n, sizeof(int), cudaMemcpyHostToDevice));
@@ -273,6 +260,7 @@ void SparseMatmul::backward()
 
     CHECK(cudaMemcpy(&b->grad[0], b2_grad, sizeof(float) * b->grad.size(), cudaMemcpyDeviceToHost));
 
+    // b->zero_grad();
     /* for (int i = 0; i < sp->indptr.size() - 1; i++)
         for (int jj = sp->indptr[i]; jj < sp->indptr[i + 1]; jj++)
         {
