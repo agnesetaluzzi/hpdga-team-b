@@ -17,7 +17,7 @@ class Matmul: public Module {
     float *a_grad, *b_grad, *c_grad;
 public:
     Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p);
-    ~Matmul() {}
+    ~Matmul();
     void forward(bool);
     void backward();
 };
@@ -31,7 +31,7 @@ class SparseMatmul: public Module {
     int *sp_indptr, *sp_indices;
 public:
     SparseMatmul(Variable *a, Variable *b, Variable *c, SparseIndex *sp, int m, int n, int p);
-    ~SparseMatmul() {}
+    ~SparseMatmul();
     void forward(bool);
     void backward();
 };
@@ -45,7 +45,7 @@ class GraphSum: public Module {
     int *graph_indptr, *graph_indices;
 public:
     GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim);
-    ~GraphSum() {}
+    ~GraphSum();
     void forward(bool);
     void backward();
 };
@@ -57,7 +57,7 @@ class CrossEntropyLoss: public Module {
     int num_classes;
 public:
     CrossEntropyLoss(Variable *logits, int *truth, float *loss, int num_classes);
-    ~CrossEntropyLoss() {}
+    ~CrossEntropyLoss();
     void forward(bool);
     void backward();
 };

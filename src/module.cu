@@ -43,6 +43,16 @@ Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a
     CHECK(cudaMalloc(&c_grad, c->grad.size() * sizeof(float)));
 }
 
+Matmul::~Matmul()
+{
+    CHECK(cudaFree(a_data));
+    CHECK(cudaFree(b_data));
+    CHECK(cudaFree(c_data));
+    CHECK(cudaFree(a_grad));
+    CHECK(cudaFree(b_grad));
+    CHECK(cudaFree(c_grad));
+}
+
 __global__ void gpu_matmul_forward(float *a_gpu, float *b_gpu, float *c_gpu, const int m, const int n, const int p)
 {
     int i = blockIdx.x;
@@ -143,6 +153,17 @@ SparseMatmul::SparseMatmul(Variable *a, Variable *b, Variable *c, SparseIndex *s
     CHECK(cudaMalloc(&sp_indices, sp->indices.size() * sizeof(float)));
 }
 
+SparseMatmul::~SparseMatmul()
+{
+    CHECK(cudaFree(a_data));
+    CHECK(cudaFree(b_data));
+    CHECK(cudaFree(c_data));
+    CHECK(cudaFree(b_grad));
+    CHECK(cudaFree(c_grad));
+    CHECK(cudaFree(sp_indptr));
+    CHECK(cudaFree(sp_indices));
+}
+
 __global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c_data, int *sp_indptr, int *sp_indices, const int p)
 {
     int i = blockIdx.x;
@@ -224,6 +245,16 @@ GraphSum::GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim) : i
     CHECK(cudaMalloc(&graph_indices, graph->indices.size() * sizeof(int)));
 }
 
+GraphSum::~GraphSum()
+{
+    CHECK(cudaFree(in_data));
+    CHECK(cudaFree(out_data));
+    CHECK(cudaFree(in_grad));
+    CHECK(cudaFree(out_grad));
+    CHECK(cudaFree(graph_indptr));
+    CHECK(cudaFree(graph_indices));
+}
+
 __global__ void gpu_graph_sum_forward(float *in_data, float *out_data, int *graph_indptr, int *graph_indices, const int dim)
 {
     int src = blockIdx.x;
@@ -300,6 +331,10 @@ void GraphSum::backward()
 CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth, float *loss, int num_classes) :
         logits(logits), truth(truth), loss(loss), num_classes(num_classes) {}
 
+CrossEntropyLoss::~CrossEntropyLoss()
+{
+}
+
 void CrossEntropyLoss::forward(bool training) {
     timer_start(TMR_LOSS_FW);
     float total_loss = 0;
@@ -355,6 +390,9 @@ ReLU::ReLU(Variable *in)
 ReLU::~ReLU()
 {
     delete[] mask;
+    CHECK(cudaFree(in_data));
+    CHECK(cudaFree(in_grad));
+    CHECK(cudaFree(mask_gpu));
 }
 
 __global__ void gpu_relu_forward(float *in_data, bool *mask, const bool training){
