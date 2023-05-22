@@ -132,23 +132,21 @@ void Matmul::backward()
  */
 SparseMatmul::SparseMatmul(Variable *a, Variable *b, Variable *c, SparseIndex *sp, int m, int n, int p) : a(a), b(b), c(c), sp(sp), m(m), n(n), p(p)
 {
-    cudaMalloc(&a_data, a->data.size() * sizeof(float));
-    cudaMalloc(&b_data, b->data.size() * sizeof(float));
-    cudaMalloc(&c_data, c->data.size() * sizeof(float));
+    CHECK(cudaMalloc(&a_data, a->data.size() * sizeof(float)));
+    CHECK(cudaMalloc(&b_data, b->data.size() * sizeof(float)));
+    CHECK(cudaMalloc(&c_data, c->data.size() * sizeof(float)));
 
-    cudaMalloc(&b_grad, b->grad.size() * sizeof(float));
-    cudaMalloc(&c_grad, c->grad.size() * sizeof(float));
+    CHECK(cudaMalloc(&b_grad, b->grad.size() * sizeof(float)));
+    CHECK(cudaMalloc(&c_grad, c->grad.size() * sizeof(float)));
 
-    cudaMalloc(&sp_indptr, sp->indptr.size() * sizeof(float));
-    cudaMalloc(&sp_indices, sp->indices.size() * sizeof(float));
+    CHECK(cudaMalloc(&sp_indptr, sp->indptr.size() * sizeof(float)));
+    CHECK(cudaMalloc(&sp_indices, sp->indices.size() * sizeof(float)));
 }
 
 __global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c_data, int *sp_indptr, int *sp_indices, const int p)
 {
     int i = blockIdx.x;
     int k = threadIdx.x;
-
-    c_data[i * p + k] = 0;
 
     for (int jj = sp_indptr[i]; jj < sp_indptr[i + 1]; jj++)
     {
@@ -165,7 +163,7 @@ void SparseMatmul::forward(bool training)
     CHECK(cudaMemcpy(sp_indices, &(sp->indices[0]), sizeof(int) * sp->indices.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(a_data, &(a->data[0]), sizeof(float) * a->data.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(c_data, &(c->data[0]), sizeof(float) * c->data.size(), cudaMemcpyHostToDevice));
+    CHECK(cudaMemset(c_data, 0, sizeof(float) * c->data.size()));
 
     dim3 blocksPerGrid(sp->indptr.size() - 1, 1, 1);
     dim3 threadsPerBlock(p, 1, 1);
@@ -218,20 +216,18 @@ void SparseMatmul::backward()
  */
 GraphSum::GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim) : in(in), out(out), graph(graph), dim(dim)
 {
-    cudaMalloc(&in_data, in->data.size() * sizeof(float));
-    cudaMalloc(&out_data, out->data.size() * sizeof(float));
-    cudaMalloc(&in_grad, in->grad.size() * sizeof(float));
-    cudaMalloc(&out_grad, out->grad.size() * sizeof(float));
-    cudaMalloc(&graph_indptr, graph->indptr.size() * sizeof(int));
-    cudaMalloc(&graph_indices, graph->indices.size() * sizeof(int));
+    CHECK(cudaMalloc(&in_data, in->data.size() * sizeof(float)));
+    CHECK(cudaMalloc(&out_data, out->data.size() * sizeof(float)));
+    CHECK(cudaMalloc(&in_grad, in->grad.size() * sizeof(float)));
+    CHECK(cudaMalloc(&out_grad, out->grad.size() * sizeof(float)));
+    CHECK(cudaMalloc(&graph_indptr, graph->indptr.size() * sizeof(int)));
+    CHECK(cudaMalloc(&graph_indices, graph->indices.size() * sizeof(int)));
 }
 
 __global__ void gpu_graph_sum_forward(float *in_data, float *out_data, int *graph_indptr, int *graph_indices, const int dim)
 {
     int src = blockIdx.x;
     int j = threadIdx.x;
-
-    out_data[src * dim + j] = 0;
 
     for (int i = graph_indptr[src]; i < graph_indptr[src + 1]; i++)
     {
@@ -248,7 +244,7 @@ void GraphSum::forward(bool training)
     CHECK(cudaMemcpy(graph_indptr, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(graph_indices, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(in_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(out_data, &(out->data[0]), sizeof(float) * out->data.size(), cudaMemcpyHostToDevice));
+    CHECK(cudaMemset(out_data, 0, sizeof(float) * out->data.size()));
 
     dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
     dim3 threadsPerBlock(dim, 1, 1);
@@ -266,8 +262,6 @@ __global__ void gpu_graph_sum_backward(float *in_grad, float *out_grad, int *gra
     int src = blockIdx.x;
     int j = threadIdx.x;
 
-    in_grad[src * dim + j] = 0;
-
     for (int i = graph_indptr[src]; i < graph_indptr[src + 1]; i++)
     {
         int dst = graph_indices[i];
@@ -283,7 +277,7 @@ void GraphSum::backward()
 
     CHECK(cudaMemcpy(graph_indptr, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(graph_indices, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
-    CHECK(cudaMemcpy(in_grad, &(in->grad[0]), sizeof(float) * in->grad.size(), cudaMemcpyHostToDevice));
+    CHECK(cudaMemset(in_grad, 0, sizeof(float) * in->grad.size()));
     CHECK(cudaMemcpy(out_grad, &(out->grad[0]), sizeof(float) * out->grad.size(), cudaMemcpyHostToDevice));
 
     dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
@@ -353,9 +347,9 @@ ReLU::ReLU(Variable *in)
     this->in = in;
     mask = new bool[in->data.size()];
 	
-	cudaMalloc(&in_data, in->data.size() * sizeof(float));
-	cudaMalloc(&in_grad, in->grad.size() * sizeof(float));
-	cudaMalloc(&mask_gpu, in->data.size() * sizeof(bool));
+	CHECK(cudaMalloc(&in_data, in->data.size() * sizeof(float)));
+	CHECK(cudaMalloc(&in_grad, in->grad.size() * sizeof(float)));
+	CHECK(cudaMalloc(&mask_gpu, in->data.size() * sizeof(bool)));
 }
 
 ReLU::~ReLU()
