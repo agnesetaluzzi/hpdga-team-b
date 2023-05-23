@@ -45,7 +45,7 @@ Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a
     CHECK(cudaMalloc(&b_grad, b->grad.size() * sizeof(float)));
     CHECK(cudaMalloc(&layer2_var1_grad, c->grad.size() * sizeof(float)));
 	
-    cudaMalloc(&b_sum, a->data.size() * b->data.size() * sizeof(float));
+    CHECK(cudaMalloc(&b_sum, a->data.size() * b->data.size() * sizeof(float)));
 }
 
 Matmul::~Matmul()
@@ -79,7 +79,6 @@ void Matmul::forward(bool training)
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
-    CHECK(cudaMemcpy(&c->data[0], layer2_var1_data, sizeof(float) * c->data.size(), cudaMemcpyDeviceToHost));
     timer_stop(TMR_MATMUL_FW);
 }
 
@@ -125,8 +124,9 @@ __global__ void gpu_matmul_backward2_sum(float *values, const int dim, const int
     if(idx > n * p) return;
     int j = idx / (p);
     int k = idx % (p);
-    if(dim % 2 == 0 || pos != int(dim / 2)){
-	values[pos * n * n + j * p + k] += values[(pos + dim2) * n * n + j * p + k];
+    if(dim % 2 == 0 || pos != int(dim / 2))
+    {
+	    values[pos * n * n + j * p + k] += values[(pos + dim2) * n * n + j * p + k];
     }
 }
 
@@ -234,8 +234,6 @@ void SparseMatmul::forward(bool training)
     gpu_sparse_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(input_data, b_data, layer1_var1_data, sp_indptr, sp_indices, p, (sp->indptr.size() - 1) * p);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
-
-    CHECK(cudaMemcpy(&c->data[0], layer1_var1_data, sizeof(float) * c->data.size(), cudaMemcpyDeviceToHost));
 
     timer_stop(TMR_SPMATMUL_FW);
 }
@@ -368,11 +366,6 @@ void GraphSum::backward()
         gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_grad, output_grad, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
-
-    if (isFirst)
-        CHECK(cudaMemcpy(&in->grad[0], layer1_var1_grad, sizeof(float) * in->grad.size(), cudaMemcpyDeviceToHost));
-    if (!isFirst)
-        CHECK(cudaMemcpy(&in->grad[0], layer2_var1_grad, sizeof(float) * in->grad.size(), cudaMemcpyDeviceToHost));
     
     timer_stop(TMR_GRAPHSUM_BW);
 }
@@ -495,8 +488,6 @@ void ReLU::backward()
     gpu_relu_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_grad, mask_gpu, in->data.size());
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
-	
-    CHECK(cudaMemcpy(&in->grad[0], layer1_var2_grad, sizeof(float) * in->grad.size(), cudaMemcpyDeviceToHost));
 
     timer_stop(TMR_RELU_BW);
 }
