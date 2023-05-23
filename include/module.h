@@ -43,8 +43,9 @@ class GraphSum: public Module {
     float *in_data, *out_data;
     float *in_grad, *out_grad;
     int *graph_indptr, *graph_indices;
+    bool isFirst;
 public:
-    GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim);
+    GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim, bool isFirst);
     ~GraphSum();
     void forward(bool);
     void backward();
@@ -78,8 +79,9 @@ class Dropout: public Module {
     Variable *in;
     int *mask;
     float p;
+    bool isFirst;
 public:
-    Dropout(Variable *in, float p);
+    Dropout(Variable *in, float p, bool isFirst);
     ~Dropout();
     void forward(bool);
     void backward();

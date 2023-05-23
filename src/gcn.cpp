@@ -58,7 +58,7 @@ GCN::GCN(GCNParams params, GCNData *input_data) {
     input = &variables.back();
 
     // dropout
-    modules.push_back(new Dropout(input, params.dropout));
+    modules.push_back(new Dropout(input, params.dropout, true));
     variables.emplace_back(params.num_nodes * params.hidden_dim);
     Variable *layer1_var1 = &variables.back();
     variables.emplace_back(params.input_dim * params.hidden_dim, true, true);
@@ -71,13 +71,13 @@ GCN::GCN(GCNParams params, GCNData *input_data) {
     Variable *layer1_var2 = &variables.back();
     
     // graphsum
-    modules.push_back(new GraphSum(layer1_var1, layer1_var2, &data->graph, params.hidden_dim));
+    modules.push_back(new GraphSum(layer1_var1, layer1_var2, &data->graph, params.hidden_dim, true));
     
     // RELU
     modules.push_back(new ReLU(layer1_var2));
     
     // dropout
-    modules.push_back(new Dropout(layer1_var2, params.dropout));
+    modules.push_back(new Dropout(layer1_var2, params.dropout, false));
     variables.emplace_back(params.num_nodes * params.output_dim);
     Variable *layer2_var1 = &variables.back();
     variables.emplace_back(params.hidden_dim * params.output_dim, true, true);
@@ -90,7 +90,7 @@ GCN::GCN(GCNParams params, GCNData *input_data) {
     output = &variables.back();
     
     // graph sum
-    modules.push_back(new GraphSum(layer2_var1, output, &data->graph, params.output_dim));
+    modules.push_back(new GraphSum(layer2_var1, output, &data->graph, params.output_dim, false));
     truth = std::vector<int>(params.num_nodes);
     
     // cross entropy loss
