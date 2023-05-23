@@ -32,6 +32,8 @@ float *input_data, *layer1_var1_data, *layer1_var1_grad, *layer1_var2_data, *lay
 
 // ################################################################################################################
 
+float *b_sum;
+
 /**
  * Dense matrix multiplication layer.
  */
@@ -42,6 +44,8 @@ Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a
 
     CHECK(cudaMalloc(&b_grad, b->grad.size() * sizeof(float)));
     CHECK(cudaMalloc(&layer2_var1_grad, c->grad.size() * sizeof(float)));
+	
+    cudaMalloc(&b_sum, a->data.size() * b->data.size() * sizeof(float));
 }
 
 Matmul::~Matmul()
@@ -81,8 +85,10 @@ void Matmul::forward(bool training)
 
 __global__ void gpu_matmul_backward1(float *a_grad, float *a_data, float *b_data, float *b_grad, float *c_grad, const int m, const int n, const int p)
 {
-    int i = blockIdx.x;
-    int j = threadIdx.x;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx > m * n) return;
+    int i = idx / n;
+    int j = idx % n;
 
     a_grad[i * n + j] = 0;
 
@@ -92,16 +98,35 @@ __global__ void gpu_matmul_backward1(float *a_grad, float *a_data, float *b_data
     }
 }
 
-__global__ void gpu_matmul_backward2(float *a_grad, float *a_data, float *b_data, float *b_grad, float *c_grad, const int m, const int n, const int p)
+__global__ void gpu_matmul_backward2_copy(float *a_grad, float *a_data, float *b_data, float *b_grad, float *c_grad, const int m, const int n, const int p, float *values)
 {
-    int j = blockIdx.x;
-    int k = threadIdx.x;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx > n * p) return;
+    int j = idx / p;
+    int k = idx % p;
+    int i = blockIdx.y;
+	
+    values[i * n * n + j * p + k] = c_grad[i * p + k] * a_data[i * n + j];
+}
 
-    b_grad[j * p + k] = 0;
+__global__ void gpu_matmul_backward2(float *b_grad, const int n, const int p, float *values)
+{
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx > n * p) return;
+    int j = idx / p;
+    int k = idx % p;
 
-    for (int i = 0; i < m; i++)
-    {
-        b_grad[j * p + k] += c_grad[i * p + k] * a_data[i * n + j];
+    b_grad[j * p + k] = values[j * p + k];
+}
+
+__global__ void gpu_matmul_backward2_sum(float *values, const int dim, const int dim2, const int m, const int n, const int p){
+    int pos = blockIdx.y;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx > n * p) return;
+    int j = idx / (p);
+    int k = idx % (p);
+    if(dim % 2 == 0 || pos != int(dim / 2)){
+	values[pos * n * n + j * p + k] += values[(pos + dim2) * n * n + j * p + k];
     }
 }
 
@@ -110,15 +135,41 @@ void Matmul::backward()
     timer_start(TMR_MATMUL_BW);
     CHECK(cudaMemcpy(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
 
-    dim3 blocksPerGrid1(m, 1, 1);
-    dim3 threadsPerBlock1(n, 1, 1);
+    dim3 blocksPerGrid1((m * n + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock1(BLOCK_DIM, 1, 1);
     gpu_matmul_backward1<<<blocksPerGrid1, threadsPerBlock1>>>(layer1_var2_grad, layer1_var2_data, b_data, b_grad, layer2_var1_grad, m, n, p);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
+	
+    dim3 blocksPerGrid0((n * p + BLOCK_DIM - 1) / BLOCK_DIM, m, 1);
+    dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
+    gpu_matmul_backward2_copy<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var2_grad, layer1_var2_data, b_data, b_grad, layer2_var1_grad, m, n, p, b_sum);
+    CHECK(cudaDeviceSynchronize());
+	
+    float log2_m = log2(m);
+    int iterations_number = log2(m);
+    if(floor(log2_m) != ceil(log2_m)){
+	iterations_number ++;
+    }
+	
+    int dim = m;
+    int dim2 = m;
+    for(int x = 0; x < iterations_number; x++){
+	if(dim2 % 2 == 0){
+	    dim2 = dim2 / 2; 
+	}else{
+	    dim2 = dim2 / 2 + 1;
+	}
+	dim3 blocksPerGridSum((n * p + BLOCK_DIM - 1) / BLOCK_DIM, dim2, 1);
+	dim3 threadsPerBlockSum(BLOCK_DIM, 1, 1);
+	gpu_matmul_backward2_sum<<<blocksPerGridSum, threadsPerBlockSum>>>(b_sum, dim, dim2, m, n, p);
+	CHECK(cudaDeviceSynchronize());
+	dim = dim2;
+    }
 
-    dim3 blocksPerGrid2(n, 1, 1);
-    dim3 threadsPerBlock2(p, 1, 1);
-    gpu_matmul_backward2<<<blocksPerGrid2, threadsPerBlock2>>>(layer1_var2_grad, layer1_var2_data, b_data, b_grad, layer2_var1_grad, m, n, p);
+    dim3 blocksPerGrid2((n * p + BLOCK_DIM - 1), 1, 1);
+    dim3 threadsPerBlock2(BLOCK_DIM, 1, 1);
+    gpu_matmul_backward2<<<blocksPerGrid2, threadsPerBlock2>>>(b_grad, n, p, b_sum);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
