@@ -2,6 +2,7 @@
 #include "../include/rand.h"
 #include "../include/timer.h"
 #include <vector>
+#define BLOCK_DIM 1024
 
 /* error handling for CUDA API functions */
 #define CHECK(call)                                                  \
@@ -51,8 +52,10 @@ Matmul::~Matmul()
 
 __global__ void gpu_matmul_forward(float *a_data, float *b_data, float *c_data, const int m, const int n, const int p)
 {
-    int i = blockIdx.x;
-    int k = threadIdx.x;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx > m * p) return;
+    int i = idx / p;
+    int k = idx % p;
 
     c_data[i * p + k] = 0;
 
@@ -66,8 +69,8 @@ void Matmul::forward(bool training)
 
     CHECK(cudaMemcpy(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
 
-    dim3 blocksPerGrid(m, 1, 1);
-    dim3 threadsPerBlock(p, 1, 1);
+    dim3 blocksPerGrid((m * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
     gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_data, b_data, layer2_var1_data, m, n, p);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
@@ -153,10 +156,12 @@ SparseMatmul::~SparseMatmul()
     CHECK(cudaFree(sp_indices));
 }
 
-__global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c_data, int *sp_indptr, int *sp_indices, const int p)
+__global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c_data, int *sp_indptr, int *sp_indices, const int p, const int idx_max)
 {
-    int i = blockIdx.x;
-    int k = threadIdx.x;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx > idx_max) return;
+    int i = idx / p;
+    int k = idx % p;
 
     c_data[i * p + k] = 0;
 
@@ -173,9 +178,9 @@ void SparseMatmul::forward(bool training)
 
     CHECK(cudaMemcpy(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
 
-    dim3 blocksPerGrid(sp->indptr.size() - 1, 1, 1);
-    dim3 threadsPerBlock(p, 1, 1);
-    gpu_sparse_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(input_data, b_data, layer1_var1_data, sp_indptr, sp_indices, p);
+    dim3 blocksPerGrid(((sp->indptr.size() - 1) * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+    gpu_sparse_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(input_data, b_data, layer1_var1_data, sp_indptr, sp_indices, p, (sp->indptr.size() - 1) * p);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
@@ -184,10 +189,12 @@ void SparseMatmul::forward(bool training)
     timer_stop(TMR_SPMATMUL_FW);
 }
 
-__global__ void gpu_sparse_matmul_backward(float *a_data, float *b_grad, float *c_grad, int *sp_indptr, int *sp_indices, const int p, const int sp_indptr_size)
+__global__ void gpu_sparse_matmul_backward(float *a_data, float *b_grad, float *c_grad, int *sp_indptr, int *sp_indices, const int p, const int idx_max)
 {
-    int i = blockIdx.x;
-    int k = threadIdx.x;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx > idx_max) return;
+    int i = idx / p;
+    int k = idx % p;
 
     for (int jj = sp_indptr[i]; jj < sp_indptr[i + 1]; jj++)
     {
@@ -202,9 +209,9 @@ void SparseMatmul::backward()
 
     CHECK(cudaMemset(b_grad, 0, sizeof(float) * b->grad.size()));
 
-    dim3 blocksPerGrid(sp->indptr.size() - 1, 1, 1);
-    dim3 threadsPerBlock(p, 1, 1);
-    gpu_sparse_matmul_backward<<<blocksPerGrid, threadsPerBlock>>>(input_data, b_grad, layer1_var1_grad, sp_indptr, sp_indices, p, sp->indptr.size());
+    dim3 blocksPerGrid(((sp->indptr.size() - 1) * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+    gpu_sparse_matmul_backward<<<blocksPerGrid, threadsPerBlock>>>(input_data, b_grad, layer1_var1_grad, sp_indptr, sp_indices, p, sp->indptr.size() * p);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
@@ -243,10 +250,12 @@ GraphSum::~GraphSum()
     CHECK(cudaFree(graph_indices));
 }
 
-__global__ void gpu_graph_sum_forward(float *in_data, float *out_data, int *graph_indptr, int *graph_indices, const int dim)
+__global__ void gpu_graph_sum_forward(float *in_data, float *out_data, int *graph_indptr, int *graph_indices, const int dim, const int idx_max)
 {
-    int src = blockIdx.x;
-    int j = threadIdx.x;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx > idx_max) return;
+    int src = idx / dim;
+    int j = idx % dim;
 
     out_data[src * dim + j] = 0;
 
@@ -262,12 +271,12 @@ void GraphSum::forward(bool training)
 {
     timer_start(TMR_GRAPHSUM_FW);
 
-    dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
-    dim3 threadsPerBlock(dim, 1, 1);
+    dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
     if (isFirst)
-        gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var1_data, layer1_var2_data, graph_indptr, graph_indices, dim);
+        gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var1_data, layer1_var2_data, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
     if (!isFirst)
-        gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_data, output_data, graph_indptr, graph_indices, dim);
+        gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_data, output_data, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
@@ -278,10 +287,12 @@ void GraphSum::forward(bool training)
     timer_stop(TMR_GRAPHSUM_FW);
 }
 
-__global__ void gpu_graph_sum_backward(float *in_grad, float *out_grad, int *graph_indptr, int *graph_indices, const int dim)
+__global__ void gpu_graph_sum_backward(float *in_grad, float *out_grad, int *graph_indptr, int *graph_indices, const int dim, const int idx_max)
 {
-    int src = blockIdx.x;
-    int j = threadIdx.x;
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx > idx_max) return;
+    int src = idx / dim;
+    int j = idx % dim;
 
     in_grad[src * dim + j] = 0;
     
@@ -298,12 +309,12 @@ void GraphSum::backward()
 {
     timer_start(TMR_GRAPHSUM_BW);
 
-    dim3 blocksPerGrid(graph->indptr.size() - 1, 1, 1);
-    dim3 threadsPerBlock(dim, 1, 1);
+    dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
     if (isFirst)
-        gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var1_grad, layer1_var2_grad, graph_indptr, graph_indices, dim);
+        gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var1_grad, layer1_var2_grad, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
     if (!isFirst)
-        gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_grad, output_grad, graph_indptr, graph_indices, dim);
+        gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_grad, output_grad, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
@@ -378,7 +389,7 @@ ReLU::ReLU(Variable *in)
     this->in = in;
     mask = new bool[in->data.size()];
 	
-	CHECK(cudaMalloc(&mask_gpu, in->data.size() * sizeof(bool)));
+    CHECK(cudaMalloc(&mask_gpu, in->data.size() * sizeof(bool)));
 }
 
 ReLU::~ReLU()
@@ -387,8 +398,9 @@ ReLU::~ReLU()
     CHECK(cudaFree(mask_gpu));
 }
 
-__global__ void gpu_relu_forward(float *in_data, bool *mask, const bool training){
-	int i = blockIdx.x;
+__global__ void gpu_relu_forward(float *in_data, bool *mask, const bool training, const int idx_max){
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if(i > idx_max) return;
 	
     bool keep = in_data[i] > 0;
     if (training)
@@ -401,20 +413,21 @@ void ReLU::forward(bool training)
 {
     timer_start(TMR_RELU_FW);
 	
-	dim3 blocksPerGrid(in->data.size(), 1, 1);
-    dim3 threadsPerBlock(1, 1, 1);
-    gpu_relu_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_data, mask_gpu, training);
+    dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+    gpu_relu_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_data, mask_gpu, training, in->data.size());
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 	
-	CHECK(cudaMemcpy(&in->data[0], layer1_var2_data, sizeof(float) * in->data.size(), cudaMemcpyDeviceToHost));
-	CHECK(cudaMemcpy(mask, mask_gpu, in->data.size() * sizeof(bool), cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(&in->data[0], layer1_var2_data, sizeof(float) * in->data.size(), cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(mask, mask_gpu, in->data.size() * sizeof(bool), cudaMemcpyDeviceToHost));
 	
     timer_stop(TMR_RELU_FW);
 }
 
-__global__ void gpu_relu_backward(float *in_grad, bool *mask){
-	int i = blockIdx.x;
+__global__ void gpu_relu_backward(float *in_grad, bool *mask, const int idx_max){
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if(i > idx_max) return;
 	
     if (!mask[i])
         in_grad[i] = 0;
@@ -424,15 +437,15 @@ void ReLU::backward()
 {
     timer_start(TMR_RELU_BW);
 	
-	CHECK(cudaMemcpy(mask_gpu, mask, in->data.size() * sizeof(bool), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(mask_gpu, mask, in->data.size() * sizeof(bool), cudaMemcpyHostToDevice));
 	
-	dim3 blocksPerGrid(in->data.size(), 1, 1);
-    dim3 threadsPerBlock(1, 1, 1);
-    gpu_relu_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_grad, mask_gpu);
+    dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+    gpu_relu_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_grad, mask_gpu, in->data.size());
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 	
-	CHECK(cudaMemcpy(&in->grad[0], layer1_var2_grad, sizeof(float) * in->grad.size(), cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(&in->grad[0], layer1_var2_grad, sizeof(float) * in->grad.size(), cudaMemcpyDeviceToHost));
 
     timer_stop(TMR_RELU_BW);
 }
