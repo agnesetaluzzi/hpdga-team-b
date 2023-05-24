@@ -99,10 +99,10 @@ __global__ void gpu_matmul_backward1(float *a_grad, float *a_data, float *b_data
 __global__ void gpu_matmul_backward2_copy(float *a_grad, float *a_data, float *b_data, float *b_grad, float *c_grad, const int m, const int n, const int p, float *values)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx >= n * p) return;
+    int i = blockIdx.y;
+    if(idx >= n * p || i >= m) return;
     int j = idx / p;
     int k = idx % p;
-    int i = blockIdx.y;
 	
     values[i * n * n + j * p + k] = c_grad[i * p + k] * a_data[i * n + j];
 }
@@ -120,7 +120,7 @@ __global__ void gpu_matmul_backward2(float *b_grad, const int n, const int p, fl
 __global__ void gpu_matmul_backward2_sum(float *values, const int dim, const int dim2, const int m, const int n, const int p){
     int pos = blockIdx.y;
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx >= n * p) return;
+    if(idx >= n * p || pos >= dim2) return;
     int j = idx / (p);
     int k = idx % (p);
     if(dim % 2 == 0 || pos != int(dim / 2))
@@ -140,30 +140,31 @@ void Matmul::backward()
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 	
-    dim3 blocksPerGrid0((n * p + BLOCK_DIM - 1) / BLOCK_DIM, m, 1);
+    int multiple32 = m + 32 - 1;
+    multiple32 -= (multiple32 % 32);
+
+    dim3 blocksPerGrid0((n * p + BLOCK_DIM - 1) / BLOCK_DIM, multiple32, 1);
     dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
     gpu_matmul_backward2_copy<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var2_grad, layer1_var2_data, b_data, b_grad, layer2_var1_grad, m, n, p, b_sum);
+    CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
-	
-    float log2_m = log2(m);
-    int iterations_number = log2(m);
-    if(floor(log2_m) != ceil(log2_m)){
-	iterations_number ++;
-    }
-	
+
+    dim3 blocksPerGridSum((n * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlockSum(BLOCK_DIM, 1, 1);
+
     int dim = m;
     int dim2 = m;
-    for(int x = 0; x < iterations_number; x++){
-	if(dim2 % 2 == 0){
-	    dim2 = dim2 / 2; 
-	}else{
-	    dim2 = dim2 / 2 + 1;
-	}
-	dim3 blocksPerGridSum((n * p + BLOCK_DIM - 1) / BLOCK_DIM, dim2, 1);
-	dim3 threadsPerBlockSum(BLOCK_DIM, 1, 1);
-	gpu_matmul_backward2_sum<<<blocksPerGridSum, threadsPerBlockSum>>>(b_sum, dim, dim2, m, n, p);
-	CHECK(cudaDeviceSynchronize());
-	dim = dim2;
+
+    for (int x = 0; x < ceil(log2(m)); x++)
+    {
+        dim2 = ceil(dim2/2.0);
+        multiple32 = dim2 + 32 - 1;
+        multiple32 -= (dim2 % 32);
+        blocksPerGridSum.y = multiple32;
+        gpu_matmul_backward2_sum<<<blocksPerGridSum, threadsPerBlockSum>>>(b_sum, dim, dim2, m, n, p);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+        dim = dim2;
     }
 
     dim3 blocksPerGrid2((n * p + BLOCK_DIM - 1), 1, 1);
