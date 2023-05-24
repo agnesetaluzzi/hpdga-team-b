@@ -36,6 +36,9 @@ float *b_sum;
 /**
  * Dense matrix multiplication layer.
  */
+
+cudaStream_t stream1;
+
 Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a), b(b), c(c), m(m), n(n), p(p)
 {
     CHECK(cudaMalloc(&b_data, b->data.size() * sizeof(float)));
@@ -45,12 +48,15 @@ Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a
     CHECK(cudaMalloc(&layer2_var1_grad, c->grad.size() * sizeof(float)));
 	
     CHECK(cudaMalloc(&b_sum, a->data.size() * b->data.size() * sizeof(float)));
+
+    cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking);
 }
 
 Matmul::~Matmul()
 {
     CHECK(cudaFree(b_data));
     CHECK(cudaFree(b_grad));
+    cudaStreamDestroy(stream1);
 }
 
 __global__ void gpu_matmul_forward(float *a_data, float *b_data, float *c_data, const int m, const int n, const int p)
@@ -132,13 +138,13 @@ __global__ void gpu_matmul_backward2_sum(float *values, const int dim, const int
 void Matmul::backward()
 {
     timer_start(TMR_MATMUL_BW);
-    CHECK(cudaMemcpy(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
+    
+    CHECK(cudaMemcpyAsync(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice, stream1));
 
     dim3 blocksPerGrid1((m * n + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
     dim3 threadsPerBlock1(BLOCK_DIM, 1, 1);
-    gpu_matmul_backward1<<<blocksPerGrid1, threadsPerBlock1>>>(layer1_var2_grad, layer1_var2_data, b_data, b_grad, layer2_var1_grad, m, n, p);
+    gpu_matmul_backward1<<<blocksPerGrid1, threadsPerBlock1, 0, stream1>>>(layer1_var2_grad, layer1_var2_data, b_data, b_grad, layer2_var1_grad, m, n, p);
     CHECK_KERNELCALL();
-    CHECK(cudaDeviceSynchronize());
 	
     int multiple32 = m + 32 - 1;
     multiple32 -= (multiple32 % 32);
