@@ -379,9 +379,9 @@ void GraphSum::backward()
 
 // ################################################################################################################
 
-/* int *count_cel_gpu;
+int *count_cel_gpu;
 int *truth_cel_gpu;
-float *total_loss_cel_gpu; */
+float *total_loss_cel_gpu;
 
 /**
  * Each predicted class probability is compared to the actual class desired and a loss is computed to penalize the proabability based on how far it is with respect to the actual expected value.
@@ -390,13 +390,10 @@ float *total_loss_cel_gpu; */
 CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth, float *loss, int num_classes) :
         logits(logits), truth(truth), loss(loss), num_classes(num_classes) 
 {
-    /* CHECK(cudaMalloc(&count_cel_gpu, sizeof(int)));
+    CHECK(cudaMalloc(&count_cel_gpu, sizeof(int)));
     CHECK(cudaMalloc(&total_loss_cel_gpu, sizeof(float)));
-    CHECK(cudaMemset(count_cel_gpu, 0, sizeof(int)));
-    CHECK(cudaMemset(total_loss_cel_gpu, 0.0, sizeof(float)));
 
     CHECK(cudaMalloc(&truth_cel_gpu, sizeof(int) * (logits->data.size() / num_classes)));
-    CHECK(cudaMemcpy(truth_cel_gpu, truth, sizeof(int) * (logits->data.size() / num_classes), cudaMemcpyHostToDevice)); */
 }
 
 CrossEntropyLoss::~CrossEntropyLoss()
@@ -414,14 +411,12 @@ CrossEntropyLoss::~CrossEntropyLoss()
     CHECK(cudaFree(b_sum));
 }
 
-__global__ void gpu_cross_entropy_loss_forward(int *truth, int *count, float *logits_data, float *total_loss, float *logits_grad, const bool training, const int idx_max, const int num_classes){
+__global__ void gpu_cross_entropy_loss_forward1(int *truth, int *count, float *logits_data, float *total_loss, float *logits_grad, const bool training, const int idx_max, const int num_classes){
     int i = threadIdx.x + blockIdx.x * blockDim.x;
+
     if(i >= idx_max || truth[i] < 0) return;
 
-    __shared__ int count_shared;
-    __shared__ float total_loss_shared;
-
-    atomicAdd(&count_shared, 1);
+    atomicAdd(count, 1);
 
     float *logit = &logits_data[i * num_classes];
     float max_logit = -1e30, sum_exp = 0;
@@ -432,14 +427,7 @@ __global__ void gpu_cross_entropy_loss_forward(int *truth, int *count, float *lo
         logit[j] -= max_logit;
         sum_exp += expf(logit[j]);
     }
-    atomicAdd(&total_loss_shared, logf(sum_exp) - logit[truth[i]]);
-
-    __syncthreads();
-    if (threadIdx.x == 0)
-    {
-        atomicAdd(count, count_shared);
-        atomicAdd(total_loss, total_loss_shared);
-    }
+    atomicAdd(total_loss, logf(sum_exp) - logit[truth[i]]);
 
     if (training)
     {
@@ -452,50 +440,43 @@ __global__ void gpu_cross_entropy_loss_forward(int *truth, int *count, float *lo
     }
 }
 
+__global__ void gpu_cross_entropy_loss_forward2(float *logits_grad, const int count, const int idx_max)
+{
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if(i >= idx_max) return;
+
+    logits_grad[i] /= count;
+}
+
 void CrossEntropyLoss::forward(bool training) {
+    
     timer_start(TMR_LOSS_FW);
     float total_loss = 0;
     int count = 0;
-    if (training) logits->zero_grad();
-    for (int i = 0; i < logits->data.size() / num_classes; i++) {
-        if (truth[i] < 0) continue;
-        count++;
-        float *logit = &logits->data[i * num_classes];
-        float max_logit = -1e30, sum_exp = 0;
-        for (int j = 0; j < num_classes; j++)
-            max_logit = fmax(max_logit, logit[j]);
-        for (int j = 0; j < num_classes; j++) {
-            logit[j] -= max_logit;
-            sum_exp += expf(logit[j]);
-        }
-        total_loss += logf(sum_exp) - logit[truth[i]];
+    CHECK(cudaMemset(count_cel_gpu, 0, sizeof(int)));
+    CHECK(cudaMemset(total_loss_cel_gpu, 0.0, sizeof(float)));
+    
+    CHECK(cudaMemcpy(truth_cel_gpu, truth, sizeof(int) * (logits->data.size() / num_classes), cudaMemcpyHostToDevice));
 
-        if (training) {
-            for (int j = 0; j < num_classes; j++) {
-                float prob = expf(logit[j]) / sum_exp;
-                logits->grad[i * num_classes + j] = prob;
-            }
-            logits->grad[i * num_classes + truth[i]] -= 1.0;
-        }
-    }
-
-    /* dim3 blocksPerGrid(((logits->data.size() / num_classes) + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 blocksPerGrid(((logits->data.size() / num_classes) + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
     dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-    gpu_cross_entropy_loss_forward<<<blocksPerGrid, threadsPerBlock>>>(truth_cel_gpu, count_cel_gpu, output_data, total_loss_cel_gpu, output_grad, training, (logits->data.size() / num_classes), num_classes);
+    gpu_cross_entropy_loss_forward1<<<blocksPerGrid, threadsPerBlock>>>(truth_cel_gpu, count_cel_gpu, output_data, total_loss_cel_gpu, output_grad, training, (logits->data.size() / num_classes), num_classes);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
     CHECK(cudaMemcpy(&total_loss, total_loss_cel_gpu, sizeof(float), cudaMemcpyDeviceToHost));
-	CHECK(cudaMemcpy(&count, count_cel_gpu, sizeof(int), cudaMemcpyDeviceToHost)); */
+	CHECK(cudaMemcpy(&count, count_cel_gpu, sizeof(int), cudaMemcpyDeviceToHost));
 
     *loss = total_loss / count;
     if (training)
-        for (float & i : logits->grad)
-            i /= count;
-    timer_stop(TMR_LOSS_FW);
+    {
+        blocksPerGrid.x = (logits->grad.size() + BLOCK_DIM - 1) / BLOCK_DIM;
+        gpu_cross_entropy_loss_forward2<<<blocksPerGrid, threadsPerBlock>>>(output_grad, count, logits->grad.size());
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+    }
 
-	CHECK(cudaMemcpy(output_data, &(logits->data[0]), sizeof(float) * logits->data.size(), cudaMemcpyHostToDevice));
-	CHECK(cudaMemcpy(output_grad, &(logits->grad[0]), sizeof(float) * logits->grad.size(), cudaMemcpyHostToDevice));
+    timer_stop(TMR_LOSS_FW);
 }
 
 void CrossEntropyLoss::backward() {

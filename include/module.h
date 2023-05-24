@@ -56,6 +56,9 @@ class CrossEntropyLoss: public Module {
     int *truth;
     float *loss;
     int num_classes;
+    int *count_gpu;
+    int *truth_gpu;
+    float *total_loss_gpu;
 public:
     CrossEntropyLoss(Variable *logits, int *truth, float *loss, int num_classes);
     ~CrossEntropyLoss();
