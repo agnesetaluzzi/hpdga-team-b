@@ -28,7 +28,7 @@
         }                                                            \
     }
 
-float *input_data, *layer1_var1_data, *layer1_var1_grad, *layer1_var2_data, *layer1_var2_grad, *layer2_var1_data, *layer2_var1_grad, *output_data, *output_grad;
+float *input_data, *input_grad, *layer1_var1_data, *layer1_var1_grad, *layer1_var2_data, *layer1_var2_grad, *layer2_var1_data, *layer2_var1_grad, *output_data, *output_grad;
 float *b_sum;
 
 // ################################################################################################################
@@ -381,6 +381,7 @@ CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth, float *loss, in
 CrossEntropyLoss::~CrossEntropyLoss()
 {
     CHECK(cudaFree(input_data));
+    CHECK(cudaFree(input_grad));
     CHECK(cudaFree(layer1_var1_data));
     CHECK(cudaFree(layer1_var1_grad));
     CHECK(cudaFree(layer1_var2_data));
@@ -512,18 +513,27 @@ Dropout::Dropout(Variable *in, float p, bool isFirst) : isFirst(isFirst)
     this->in = in;
     this->p = p;
     if (!in->grad.empty())
+    {
         mask = new int[in->data.size()];
+        CHECK(cudaMalloc(&mask_gpu, in->data.size() * sizeof(int)));
+    }
     else
         mask = nullptr;
 
     if (isFirst)
+    {
         CHECK(cudaMalloc(&input_data, in->data.size() * sizeof(float)));
+        CHECK(cudaMalloc(&input_grad, in->grad.size() * sizeof(float)));
+    }
 }
 
 Dropout::~Dropout()
 {
     if (mask)
+    {
         delete[] mask;
+        CHECK(cudaFree(mask_gpu));
+    }
 }
 
 void Dropout::forward(bool training)
@@ -550,6 +560,16 @@ void Dropout::forward(bool training)
         CHECK(cudaMemcpy(input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
     if (!isFirst)
         CHECK(cudaMemcpy(layer1_var2_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+    if (mask)
+        CHECK(cudaMemcpy(mask_gpu, mask, sizeof(int) * in->data.size(), cudaMemcpyHostToDevice));
+}
+
+__global__ void gpu_dropout_backward(float *in_grad, int *mask, const int scale, const int idx_max)
+{
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx > idx_max) return;
+
+    in_grad[idx] *= mask[idx] ? scale : 0;
 }
 
 void Dropout::backward()
@@ -558,12 +578,22 @@ void Dropout::backward()
         return;
     timer_start(TMR_DROPOUT_BW);
     float scale = 1 / (1 - p);
-    for (int i = 0; i < in->data.size(); i++)
-        in->grad[i] *= mask[i] ? scale : 0;
-    timer_stop(TMR_DROPOUT_BW);
+    /* for (int i = 0; i < in->data.size(); i++)
+        in->grad[i] *= mask[i] ? scale : 0; */
 
-    if (!isFirst)
-        CHECK(cudaMemcpy(layer1_var2_grad, &(in->grad[0]), sizeof(float) * in->grad.size(), cudaMemcpyHostToDevice));
+    /* if (!isFirst)
+        CHECK(cudaMemcpy(layer1_var2_grad, &(in->grad[0]), sizeof(float) * in->grad.size(), cudaMemcpyHostToDevice)); */
+
+    dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+    if (isFirst)
+        gpu_dropout_backward<<<blocksPerGrid, threadsPerBlock>>>(input_grad, mask_gpu, scale, in->data.size());
+    else
+        gpu_dropout_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_grad, mask_gpu, scale, in->data.size());
+    CHECK_KERNELCALL();
+    CHECK(cudaDeviceSynchronize());
+
+    timer_stop(TMR_DROPOUT_BW);
 }
 
 // ################################################################################################################

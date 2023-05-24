@@ -80,6 +80,7 @@ class Dropout: public Module {
     int *mask;
     float p;
     bool isFirst;
+    int *mask_gpu;
 public:
     Dropout(Variable *in, float p, bool isFirst);
     ~Dropout();
