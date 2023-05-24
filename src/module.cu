@@ -16,7 +16,7 @@
         }                                                            \
     }
 
-/* Check to kernel call */
+/* check to kernel call */
 #define CHECK_KERNELCALL()                                           \
     {                                                                \
         const cudaError_t err = cudaGetLastError();                  \
@@ -29,10 +29,9 @@
     }
 
 float *input_data, *layer1_var1_data, *layer1_var1_grad, *layer1_var2_data, *layer1_var2_grad, *layer2_var1_data, *layer2_var1_grad, *output_data, *output_grad;
+float *b_sum;
 
 // ################################################################################################################
-
-float *b_sum;
 
 /**
  * Dense matrix multiplication layer.
@@ -381,6 +380,16 @@ CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth, float *loss, in
 
 CrossEntropyLoss::~CrossEntropyLoss()
 {
+    CHECK(cudaFree(input_data));
+    CHECK(cudaFree(layer1_var1_data));
+    CHECK(cudaFree(layer1_var1_grad));
+    CHECK(cudaFree(layer1_var2_data));
+    CHECK(cudaFree(layer1_var2_grad));
+    CHECK(cudaFree(layer2_var1_data));
+    CHECK(cudaFree(layer2_var1_grad));
+    CHECK(cudaFree(output_data));
+    CHECK(cudaFree(output_grad));
+    CHECK(cudaFree(b_sum));
 }
 
 void CrossEntropyLoss::forward(bool training) {
