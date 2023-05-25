@@ -2,7 +2,7 @@
 #include "../include/rand.h"
 #include "../include/timer.h"
 #include <vector>
-#define BLOCK_DIM 1024
+#define BLOCK_DIM 256
 
 /* error handling for CUDA API functions */
 #define CHECK(call)                                                  \
@@ -16,7 +16,7 @@
         }                                                            \
     }
 
-/* Check to kernel call */
+/* check to kernel call */
 #define CHECK_KERNELCALL()                                           \
     {                                                                \
         const cudaError_t err = cudaGetLastError();                  \
@@ -28,15 +28,15 @@
         }                                                            \
     }
 
-float *input_data, *layer1_var1_data, *layer1_var1_grad, *layer1_var2_data, *layer1_var2_grad, *layer2_var1_data, *layer2_var1_grad, *output_data, *output_grad;
+float *input_data, *input_grad, *layer1_var1_data, *layer1_var1_grad, *layer1_var2_data, *layer1_var2_grad, *layer2_var1_data, *layer2_var1_grad, *output_data, *output_grad;
+float *b_sum;
 
 // ################################################################################################################
-
-float *b_sum;
 
 /**
  * Dense matrix multiplication layer.
  */
+
 Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a), b(b), c(c), m(m), n(n), p(p)
 {
     CHECK(cudaMalloc(&b_data, b->data.size() * sizeof(float)));
@@ -57,7 +57,7 @@ Matmul::~Matmul()
 __global__ void gpu_matmul_forward(float *a_data, float *b_data, float *c_data, const int m, const int n, const int p)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx > m * p) return;
+    if(idx >= m * p) return;
     int i = idx / p;
     int k = idx % p;
 
@@ -82,10 +82,10 @@ void Matmul::forward(bool training)
     timer_stop(TMR_MATMUL_FW);
 }
 
-__global__ void gpu_matmul_backward1(float *a_grad, float *a_data, float *b_data, float *b_grad, float *c_grad, const int m, const int n, const int p)
+__global__ void gpu_matmul_backward1(float *a_grad, float *b_data, float *c_grad, const int m, const int n, const int p)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx > m * n) return;
+    if(idx >= m * n) return;
     int i = idx / n;
     int j = idx % n;
 
@@ -97,13 +97,13 @@ __global__ void gpu_matmul_backward1(float *a_grad, float *a_data, float *b_data
     }
 }
 
-__global__ void gpu_matmul_backward2_copy(float *a_grad, float *a_data, float *b_data, float *b_grad, float *c_grad, const int m, const int n, const int p, float *values)
+__global__ void gpu_matmul_backward2_copy(float *a_grad, float *a_data, float *c_grad, const int m, const int n, const int p, float *values)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx > n * p) return;
+    int i = blockIdx.y;
+    if(idx >= n * p || i >= m) return;
     int j = idx / p;
     int k = idx % p;
-    int i = blockIdx.y;
 	
     values[i * n * n + j * p + k] = c_grad[i * p + k] * a_data[i * n + j];
 }
@@ -111,7 +111,7 @@ __global__ void gpu_matmul_backward2_copy(float *a_grad, float *a_data, float *b
 __global__ void gpu_matmul_backward2(float *b_grad, const int n, const int p, float *values)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx > n * p) return;
+    if(idx >= n * p) return;
     int j = idx / p;
     int k = idx % p;
 
@@ -121,7 +121,7 @@ __global__ void gpu_matmul_backward2(float *b_grad, const int n, const int p, fl
 __global__ void gpu_matmul_backward2_sum(float *values, const int dim, const int dim2, const int m, const int n, const int p){
     int pos = blockIdx.y;
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx > n * p) return;
+    if(idx >= n * p || pos >= dim2) return;
     int j = idx / (p);
     int k = idx % (p);
     if(dim % 2 == 0 || pos != int(dim / 2))
@@ -133,38 +133,39 @@ __global__ void gpu_matmul_backward2_sum(float *values, const int dim, const int
 void Matmul::backward()
 {
     timer_start(TMR_MATMUL_BW);
+    
     CHECK(cudaMemcpy(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
 
     dim3 blocksPerGrid1((m * n + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
     dim3 threadsPerBlock1(BLOCK_DIM, 1, 1);
-    gpu_matmul_backward1<<<blocksPerGrid1, threadsPerBlock1>>>(layer1_var2_grad, layer1_var2_data, b_data, b_grad, layer2_var1_grad, m, n, p);
+    gpu_matmul_backward1<<<blocksPerGrid1, threadsPerBlock1>>>(layer1_var2_grad, b_data, layer2_var1_grad, m, n, p);
+    CHECK_KERNELCALL();
+	
+    int multiple32 = m + 32 - 1;
+    multiple32 -= (multiple32 % 32);
+
+    dim3 blocksPerGrid0((n * p + BLOCK_DIM - 1) / BLOCK_DIM, multiple32, 1);
+    dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
+    gpu_matmul_backward2_copy<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var2_grad, layer1_var2_data, layer2_var1_grad, m, n, p, b_sum);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
-	
-    dim3 blocksPerGrid0((n * p + BLOCK_DIM - 1) / BLOCK_DIM, m, 1);
-    dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
-    gpu_matmul_backward2_copy<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var2_grad, layer1_var2_data, b_data, b_grad, layer2_var1_grad, m, n, p, b_sum);
-    CHECK(cudaDeviceSynchronize());
-	
-    float log2_m = log2(m);
-    int iterations_number = log2(m);
-    if(floor(log2_m) != ceil(log2_m)){
-	iterations_number ++;
-    }
-	
+
+    dim3 blocksPerGridSum((n * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlockSum(BLOCK_DIM, 1, 1);
+
     int dim = m;
     int dim2 = m;
-    for(int x = 0; x < iterations_number; x++){
-	if(dim2 % 2 == 0){
-	    dim2 = dim2 / 2; 
-	}else{
-	    dim2 = dim2 / 2 + 1;
-	}
-	dim3 blocksPerGridSum((n * p + BLOCK_DIM - 1) / BLOCK_DIM, dim2, 1);
-	dim3 threadsPerBlockSum(BLOCK_DIM, 1, 1);
-	gpu_matmul_backward2_sum<<<blocksPerGridSum, threadsPerBlockSum>>>(b_sum, dim, dim2, m, n, p);
-	CHECK(cudaDeviceSynchronize());
-	dim = dim2;
+
+    for (int x = 0; x < ceil(log2(m)); x++)
+    {
+        dim2 = ceil(dim2/2.0);
+        multiple32 = dim2 + 32 - 1;
+        multiple32 -= (dim2 % 32);
+        blocksPerGridSum.y = multiple32;
+        gpu_matmul_backward2_sum<<<blocksPerGridSum, threadsPerBlockSum>>>(b_sum, dim, dim2, m, n, p);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+        dim = dim2;
     }
 
     dim3 blocksPerGrid2((n * p + BLOCK_DIM - 1), 1, 1);
@@ -210,7 +211,7 @@ SparseMatmul::~SparseMatmul()
 __global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c_data, int *sp_indptr, int *sp_indices, const int p, const int idx_max)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx > idx_max) return;
+    if(idx >= idx_max) return;
     int i = idx / p;
     int k = idx % p;
 
@@ -241,7 +242,7 @@ void SparseMatmul::forward(bool training)
 __global__ void gpu_sparse_matmul_backward(float *a_data, float *b_grad, float *c_grad, int *sp_indptr, int *sp_indices, const int p, const int idx_max)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx > idx_max) return;
+    if(idx >= idx_max) return;
     int i = idx / p;
     int k = idx % p;
 
@@ -283,7 +284,7 @@ GraphSum::GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim, boo
         CHECK(cudaMalloc(&layer1_var2_data, out->data.size() * sizeof(float)));
         CHECK(cudaMalloc(&layer1_var2_grad, out->grad.size() * sizeof(float)));
     }
-    if (!isFirst)
+    else
     {
         CHECK(cudaMalloc(&output_data, out->data.size() * sizeof(float)));
         CHECK(cudaMalloc(&output_grad, out->grad.size() * sizeof(float)));
@@ -309,7 +310,7 @@ GraphSum::~GraphSum()
 __global__ void gpu_graph_sum_forward_zero(float *in_data, float *out_data, int *graph_indptr, int *graph_indices, const int dim, const int idx_max)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx > idx_max) return;
+    if(idx >= idx_max) return;
     int src = idx / dim;
     int j = idx % dim;
 
@@ -352,22 +353,26 @@ void GraphSum::forward(bool training)
     dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
     if (isFirst)
         gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var1_data, layer1_var2_data, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
-    if (!isFirst)
+    else
         gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_data, output_data, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
     if (isFirst)
+    {
         CHECK(cudaMemcpy(&out->data[0], layer1_var2_data, sizeof(float) * out->data.size(), cudaMemcpyDeviceToHost));
-    if (!isFirst)
+    }
+    else
+    {
         CHECK(cudaMemcpy(&out->data[0], output_data, sizeof(float) * out->data.size(), cudaMemcpyDeviceToHost));
-    timer_stop(TMR_GRAPHSUM_FW);
+        timer_stop(TMR_GRAPHSUM_FW);
+    }
 }
 
 __global__ void gpu_graph_sum_backward_zero(float *in_grad, float *out_grad, int *graph_indptr, int *graph_indices, const int dim, const int idx_max)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx > idx_max) return;
+    if(idx >= idx_max) return;
     int src = idx / dim;
     int j = idx % dim;
 
@@ -409,7 +414,7 @@ void GraphSum::backward()
     dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
     if (isFirst)
         gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var1_grad, layer1_var2_grad, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
-    if (!isFirst)
+    else
         gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_grad, output_grad, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
@@ -424,46 +429,95 @@ void GraphSum::backward()
  * Also called logaritmic loss. 
 */
 CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth, float *loss, int num_classes) :
-        logits(logits), truth(truth), loss(loss), num_classes(num_classes) {}
+        logits(logits), truth(truth), loss(loss), num_classes(num_classes) 
+{
+    CHECK(cudaMalloc(&count_gpu, sizeof(int)));
+    CHECK(cudaMalloc(&total_loss_gpu, sizeof(float)));
+
+    CHECK(cudaMalloc(&truth_gpu, sizeof(int) * (logits->data.size() / num_classes)));
+}
 
 CrossEntropyLoss::~CrossEntropyLoss()
 {
+    CHECK(cudaFree(input_data));
+    CHECK(cudaFree(input_grad));
+    CHECK(cudaFree(layer1_var1_data));
+    CHECK(cudaFree(layer1_var1_grad));
+    CHECK(cudaFree(layer1_var2_data));
+    CHECK(cudaFree(layer1_var2_grad));
+    CHECK(cudaFree(layer2_var1_data));
+    CHECK(cudaFree(layer2_var1_grad));
+    CHECK(cudaFree(output_data));
+    CHECK(cudaFree(output_grad));
+    CHECK(cudaFree(b_sum));
+}
+
+__global__ void gpu_cross_entropy_loss_forward1(int *truth, int *count, float *logits_data, float *total_loss, float *logits_grad, const bool training, const int idx_max, const int num_classes){
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+
+    if(i >= idx_max || truth[i] < 0) return;
+
+    atomicAdd(count, 1);
+
+    float *logit = &logits_data[i * num_classes];
+    float max_logit = -1e30, sum_exp = 0;
+    for (int j = 0; j < num_classes; j++)
+        max_logit = fmax(max_logit, logit[j]);
+    for (int j = 0; j < num_classes; j++)
+    {
+        logit[j] -= max_logit;
+        sum_exp += expf(logit[j]);
+    }
+    atomicAdd(total_loss, logf(sum_exp) - logit[truth[i]]);
+
+    if (training)
+    {
+        for (int j = 0; j < num_classes; j++)
+        {
+            float prob = expf(logit[j]) / sum_exp;
+            logits_grad[i * num_classes + j] = prob;
+        }
+        logits_grad[i * num_classes + truth[i]] -= 1.0;
+    }
+}
+
+__global__ void gpu_cross_entropy_loss_forward2(float *logits_grad, const int count, const int idx_max)
+{
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if(i >= idx_max) return;
+
+    logits_grad[i] /= count;
 }
 
 void CrossEntropyLoss::forward(bool training) {
+    
     timer_start(TMR_LOSS_FW);
     float total_loss = 0;
     int count = 0;
-    if (training) logits->zero_grad();
-    for (int i = 0; i < logits->data.size() / num_classes; i++) {
-        if (truth[i] < 0) continue;
-        count++;
-        float *logit = &logits->data[i * num_classes];
-        float max_logit = -1e30, sum_exp = 0;
-        for (int j = 0; j < num_classes; j++)
-            max_logit = fmax(max_logit, logit[j]);
-        for (int j = 0; j < num_classes; j++) {
-            logit[j] -= max_logit;
-            sum_exp += expf(logit[j]);
-        }
-        total_loss += logf(sum_exp) - logit[truth[i]];
+    CHECK(cudaMemset(count_gpu, 0, sizeof(int)));
+    CHECK(cudaMemset(total_loss_gpu, 0.0, sizeof(float)));
+    
+    CHECK(cudaMemcpy(truth_gpu, truth, sizeof(int) * (logits->data.size() / num_classes), cudaMemcpyHostToDevice));
 
-        if (training) {
-            for (int j = 0; j < num_classes; j++) {
-                float prob = expf(logit[j]) / sum_exp;
-                logits->grad[i * num_classes + j] = prob;
-            }
-            logits->grad[i * num_classes + truth[i]] -= 1.0;
-        }
-    }
+    dim3 blocksPerGrid(((logits->data.size() / num_classes) + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+    gpu_cross_entropy_loss_forward1<<<blocksPerGrid, threadsPerBlock>>>(truth_gpu, count_gpu, output_data, total_loss_gpu, output_grad, training, (logits->data.size() / num_classes), num_classes);
+    CHECK_KERNELCALL();
+    CHECK(cudaDeviceSynchronize());
+
+    CHECK(cudaMemcpy(&total_loss, total_loss_gpu, sizeof(float), cudaMemcpyDeviceToHost));
+	  CHECK(cudaMemcpy(&count, count_gpu, sizeof(int), cudaMemcpyDeviceToHost));
+
     *loss = total_loss / count;
     if (training)
-        for (float & i : logits->grad)
-            i /= count;
-    timer_stop(TMR_LOSS_FW);
+    {
+        blocksPerGrid.x = (logits->grad.size() + BLOCK_DIM - 1) / BLOCK_DIM;
+        gpu_cross_entropy_loss_forward2<<<blocksPerGrid, threadsPerBlock>>>(output_grad, count, logits->grad.size());
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+    }
 
-	CHECK(cudaMemcpy(output_data, &(logits->data[0]), sizeof(float) * logits->data.size(), cudaMemcpyHostToDevice));
-	CHECK(cudaMemcpy(output_grad, &(logits->grad[0]), sizeof(float) * logits->grad.size(), cudaMemcpyHostToDevice));
+    timer_stop(TMR_LOSS_FW);
 }
 
 void CrossEntropyLoss::backward() {
@@ -491,7 +545,7 @@ ReLU::~ReLU()
 
 __global__ void gpu_relu_forward(float *in_data, bool *mask, const bool training, const int idx_max){
     int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if(i > idx_max) return;
+    if(i >= idx_max) return;
 	
     bool keep = in_data[i] > 0;
     if (training)
@@ -518,7 +572,7 @@ void ReLU::forward(bool training)
 
 __global__ void gpu_relu_backward(float *in_grad, bool *mask, const int idx_max){
     int i = threadIdx.x + blockIdx.x * blockDim.x;
-    if(i > idx_max) return;
+    if(i >= idx_max) return;
 	
     if (!mask[i])
         in_grad[i] = 0;
@@ -550,18 +604,29 @@ Dropout::Dropout(Variable *in, float p, bool isFirst) : isFirst(isFirst)
     this->in = in;
     this->p = p;
     if (!in->grad.empty())
+    {
         mask = new int[in->data.size()];
+        CHECK(cudaMalloc(&mask_gpu, in->data.size() * sizeof(int)));
+    }
     else
+    {
         mask = nullptr;
+    }
 
     if (isFirst)
+    {
         CHECK(cudaMalloc(&input_data, in->data.size() * sizeof(float)));
+        CHECK(cudaMalloc(&input_grad, in->grad.size() * sizeof(float)));
+    }
 }
 
 Dropout::~Dropout()
 {
     if (mask)
+    {
         delete[] mask;
+        CHECK(cudaFree(mask_gpu));
+    }
 }
 
 void Dropout::forward(bool training)
@@ -583,25 +648,49 @@ void Dropout::forward(bool training)
             mask[i] = keep;
     }
     timer_stop(TMR_DROPOUT_FW);
-    
+
     if (isFirst)
+    {
         CHECK(cudaMemcpy(input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
-    if (!isFirst)
+    }
+    else
+    {
         CHECK(cudaMemcpy(layer1_var2_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+    }
+    if (mask)
+        CHECK(cudaMemcpy(mask_gpu, mask, sizeof(int) * in->data.size(), cudaMemcpyHostToDevice));
+}
+
+__global__ void gpu_dropout_backward(float *in_grad, int *mask, const int scale, const int idx_max)
+{
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx >= idx_max) return;
+
+    in_grad[idx] *= mask[idx] ? scale : 0;
 }
 
 void Dropout::backward()
 {
     if (!mask)
         return;
+    
     timer_start(TMR_DROPOUT_BW);
     float scale = 1 / (1 - p);
-    for (int i = 0; i < in->data.size(); i++)
-        in->grad[i] *= mask[i] ? scale : 0;
-    timer_stop(TMR_DROPOUT_BW);
 
-    if (!isFirst)
-        CHECK(cudaMemcpy(layer1_var2_grad, &(in->grad[0]), sizeof(float) * in->grad.size(), cudaMemcpyHostToDevice));
+    dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+    if (isFirst)
+    {
+        gpu_dropout_backward<<<blocksPerGrid, threadsPerBlock>>>(input_grad, mask_gpu, scale, in->data.size());
+    }
+    else
+    {
+        gpu_dropout_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_grad, mask_gpu, scale, in->data.size());
+    }
+    CHECK_KERNELCALL();
+    CHECK(cudaDeviceSynchronize());
+
+    timer_stop(TMR_DROPOUT_BW);
 }
 
 // ################################################################################################################
