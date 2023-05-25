@@ -32,6 +32,7 @@
 
 float *input_data, *input_grad, *layer1_var1_data, *layer1_var1_grad, *layer1_var2_data, *layer1_var2_grad, *layer2_var1_data, *layer2_var1_grad, *output_data, *output_grad;
 float *b_sum;
+cudaStream_t stream1;
 
 // ################################################################################################################
 
@@ -48,6 +49,8 @@ Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a
     CHECK(cudaMalloc(&layer2_var1_grad, c->grad.size() * sizeof(float)));
 	
     CHECK(cudaMalloc(&b_sum, a->data.size() * b->data.size() * sizeof(float)));
+
+    cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking);
 }
 
 Matmul::~Matmul()
@@ -59,14 +62,19 @@ Matmul::~Matmul()
 __global__ void gpu_matmul_forward(float *a_data, float *b_data, float *c_data, const int m, const int n, const int p)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int thread_id = threadIdx.x;
     if(idx >= m * p) return;
     int i = idx / p;
     int k = idx % p;
 
-    c_data[i * p + k] = 0;
+    __shared__ float local_vars[BLOCK_DIM];
+
+    local_vars[thread_id] = 0;
 
     for (int j = 0; j < n; j++)
-        c_data[i * p + k] += a_data[i * n + j] * b_data[j * p + k];
+        local_vars[thread_id] += a_data[i * n + j] * b_data[j * p + k];
+
+    c_data[i * p + k] = local_vars[thread_id];
 }
 
 void Matmul::forward(bool training)
@@ -87,16 +95,21 @@ void Matmul::forward(bool training)
 __global__ void gpu_matmul_backward1(float *a_grad, float *b_data, float *c_grad, const int m, const int n, const int p)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int thread_id = threadIdx.x;
     if(idx >= m * n) return;
     int i = idx / n;
     int j = idx % n;
 
-    a_grad[i * n + j] = 0;
+    __shared__ float local_vars[BLOCK_DIM];
+
+    local_vars[thread_id] = 0;
 
     for (int k = 0; k < p; k++)
     {
-        a_grad[i * n + j] += c_grad[i * p + k] * b_data[j * p + k];
+         local_vars[thread_id] += c_grad[i * p + k] * b_data[j * p + k];
     }
+
+    a_grad[i * n + j] = local_vars[thread_id];
 }
 
 __global__ void gpu_matmul_backward2_copy(float *a_grad, float *a_data, float *c_grad, const int m, const int n, const int p, float *values)
@@ -136,11 +149,11 @@ void Matmul::backward()
 {
     timer_start(TMR_MATMUL_BW);
     
-    CHECK(cudaMemcpy(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpyAsync(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice, stream1));
 
     dim3 blocksPerGrid1((m * n + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
     dim3 threadsPerBlock1(BLOCK_DIM, 1, 1);
-    gpu_matmul_backward1<<<blocksPerGrid1, threadsPerBlock1>>>(layer1_var2_grad, b_data, layer2_var1_grad, m, n, p);
+    gpu_matmul_backward1<<<blocksPerGrid1, threadsPerBlock1, 0, stream1>>>(layer1_var2_grad, b_data, layer2_var1_grad, m, n, p);
     CHECK_KERNELCALL();
 	
     int multiple32 = m + 32 - 1;
@@ -150,7 +163,6 @@ void Matmul::backward()
     dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
     gpu_matmul_backward2_copy<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var2_grad, layer1_var2_data, layer2_var1_grad, m, n, p, b_sum);
     CHECK_KERNELCALL();
-    CHECK(cudaDeviceSynchronize());
 
     dim3 blocksPerGridSum((n * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
     dim3 threadsPerBlockSum(BLOCK_DIM, 1, 1);
@@ -166,7 +178,6 @@ void Matmul::backward()
         blocksPerGridSum.y = multiple32;
         gpu_matmul_backward2_sum<<<blocksPerGridSum, threadsPerBlockSum>>>(b_sum, dim, dim2, m, n, p);
         CHECK_KERNELCALL();
-        CHECK(cudaDeviceSynchronize());
         dim = dim2;
     }
 
@@ -213,17 +224,22 @@ SparseMatmul::~SparseMatmul()
 __global__ void gpu_sparse_matmul_forward(float *a_data, float *b_data, float *c_data, int *sp_indptr, int *sp_indices, const int p, const int idx_max)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    int thread_id = threadIdx.x;
     if(idx >= idx_max) return;
     int i = idx / p;
     int k = idx % p;
 
-    c_data[i * p + k] = 0;
+    __shared__ float local_vars[BLOCK_DIM];
+
+    local_vars[thread_id] = 0;
 
     for (int jj = sp_indptr[i]; jj < sp_indptr[i + 1]; jj++)
     {
         int j = sp_indices[jj];
-        c_data[i * p + k] += a_data[jj] * b_data[j * p + k];
+        local_vars[thread_id] += a_data[jj] * b_data[j * p + k];
     }
+
+    c_data[i * p + k] = local_vars[thread_id];
 }
 
 void SparseMatmul::forward(bool training)
@@ -333,7 +349,7 @@ __global__ void gpu_graph_sum_forward(float *in_data, float *out_data, int *grap
     {
         int dst = graph_indices[i];
         float coef = 1.0 / sqrtf((graph_indptr[src + 1] - graph_indptr[src]) * (graph_indptr[dst + 1] - graph_indptr[dst]));
-	sum += coef * in_data[dst * dim + j];
+	    sum += coef * in_data[dst * dim + j];
     }
 	atomicAdd(&out_data[src * dim + j], sum);
 }
@@ -349,7 +365,6 @@ void GraphSum::forward(bool training)
     if (!isFirst)
         gpu_graph_sum_forward_zero<<<blocksPerGrid0, threadsPerBlock0>>>(layer2_var1_data, output_data, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
     CHECK_KERNELCALL();
-    CHECK(cudaDeviceSynchronize());
 
     dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, sqrt(max_diff), 1);
     dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
@@ -452,6 +467,7 @@ CrossEntropyLoss::~CrossEntropyLoss()
     CHECK(cudaFree(output_data));
     CHECK(cudaFree(output_grad));
     CHECK(cudaFree(b_sum));
+    CHECK(cudaStreamDestroy(stream1));
 }
 
 __global__ void gpu_cross_entropy_loss_forward1(int *truth, int *count, float *logits_data, float *total_loss, float *logits_grad, const bool training, const int idx_max, const int num_classes){
@@ -508,7 +524,7 @@ void CrossEntropyLoss::forward(bool training) {
     CHECK(cudaDeviceSynchronize());
 
     CHECK(cudaMemcpy(&total_loss, total_loss_gpu, sizeof(float), cudaMemcpyDeviceToHost));
-	  CHECK(cudaMemcpy(&count, count_gpu, sizeof(int), cudaMemcpyDeviceToHost));
+	CHECK(cudaMemcpy(&count, count_gpu, sizeof(int), cudaMemcpyDeviceToHost));
 
     *loss = total_loss / count;
     if (training)
