@@ -1,8 +1,6 @@
 #include "../include/module.h"
 #include "../include/rand.h"
 #include "../include/timer.h"
-#include <curand.h>
-#include <curand_kernel.h>
 #include <vector>
 #define BLOCK_DIM 256
 
@@ -50,7 +48,7 @@ Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a
 	
     CHECK(cudaMalloc(&b_sum, a->data.size() * b->data.size() * sizeof(float)));
 
-    cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking);
+    CHECK(cudaStreamCreateWithFlags(&stream1, cudaStreamNonBlocking));
 }
 
 Matmul::~Matmul()
@@ -289,8 +287,6 @@ void SparseMatmul::backward()
 }
 
 // ################################################################################################################
-
-int max_diff;
 
 /**
  * A specialized sparse matrix multiplication for graphs.

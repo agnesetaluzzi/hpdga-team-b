@@ -44,6 +44,7 @@ class GraphSum: public Module {
     float *in_grad, *out_grad;
     int *graph_indptr, *graph_indices;
     bool isFirst;
+    int max_diff;
 public:
     GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim, bool isFirst);
     ~GraphSum();
