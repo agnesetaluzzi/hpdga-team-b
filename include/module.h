@@ -15,6 +15,7 @@ class Matmul: public Module {
     int m, n, p;
     float *a_data, *b_data, *c_data;
     float *a_grad, *b_grad, *c_grad;
+    float *b_sum;
 public:
     Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p);
     ~Matmul();
@@ -85,6 +86,8 @@ class Dropout: public Module {
     float p;
     bool isFirst;
     int *mask_gpu;
+    bool *keep_gpu;
+    bool *keep_h;
 public:
     Dropout(Variable *in, float p, bool isFirst);
     ~Dropout();
