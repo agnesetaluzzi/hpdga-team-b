@@ -58,6 +58,7 @@ GCN::GCN(GCNParams params, GCNData *input_data) {
     input = &variables.back();
 
     // dropout
+	set_input();
     modules.push_back(new Dropout(input, params.dropout, true));
     variables.emplace_back(params.num_nodes * params.hidden_dim);
     Variable *layer1_var1 = &variables.back();
@@ -151,7 +152,7 @@ float GCN::get_l2_penalty() {
  * Train an epoch of the model
 */
 std::pair<float, float> GCN::train_epoch() {
-    set_input(); // set the input data
+    //set_input(); // set the input data
 
     set_truth(1); // get the true labels for the dataset with split == 1 (train)
 
@@ -173,7 +174,7 @@ std::pair<float, float> GCN::train_epoch() {
  * current_split == 3 --> test
 */
 std::pair<float, float> GCN::eval(int current_split) {
-    set_input();
+    //set_input();
     set_truth(current_split);
     for (auto m: modules)
         m->forward(false);
