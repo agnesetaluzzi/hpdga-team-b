@@ -90,8 +90,9 @@ class Dropout: public Module {
     float p;
     bool isFirst;
     int *mask_gpu;
+    std::string input_name;
 public:
-    Dropout(Variable *in, float p, bool isFirst);
+    Dropout(Variable *in, float p, bool isFirst, std::string input_name);
     ~Dropout();
     void forward(bool);
     void backward();

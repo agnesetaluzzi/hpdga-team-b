@@ -24,7 +24,7 @@ int main(int argc, char **argv) {
     }
 
 
-    GCN gcn(params, &data); // Create and initialize and object of type GCN.
+    GCN gcn(params, &data, input_name); // Create and initialize and object of type GCN.
     gcn.run(); // Run the main function of the model in order to train and validate the solution.
     return EXIT_SUCCESS;
 }

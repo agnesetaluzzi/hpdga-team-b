@@ -61,7 +61,8 @@ GCNParams GCNParams::get_default() {
     */
 }
 
-GCN::GCN(GCNParams params, GCNData *input_data) {
+GCN::GCN(GCNParams params, GCNData *input_data, std::string input_name) : input_name(input_name)
+{
     init_rand_state();
     this->params = params;
     data = input_data;
@@ -72,7 +73,7 @@ GCN::GCN(GCNParams params, GCNData *input_data) {
 
     // dropout
 	set_input();
-    modules.push_back(new Dropout(input, params.dropout, true));
+    modules.push_back(new Dropout(input, params.dropout, true, input_name));
     variables.emplace_back(params.num_nodes * params.hidden_dim);
     Variable *layer1_var1 = &variables.back();
     variables.emplace_back(params.input_dim * params.hidden_dim, true, true);
@@ -96,7 +97,7 @@ GCN::GCN(GCNParams params, GCNData *input_data) {
     variables.emplace_back(params.hidden_dim * params.output_dim, true, true);
     Variable *layer2_weight = &variables.back();
     layer2_weight->glorot(params.hidden_dim, params.output_dim); // weights initilization
-    modules.push_back(new Dropout(layer1_var2, params.dropout, false));
+    modules.push_back(new Dropout(layer1_var2, params.dropout, false, input_name));
     
     // dense matrix multiply
     modules.push_back(new Matmul(layer1_var2, layer2_weight, layer2_var1, params.num_nodes, params.hidden_dim, params.output_dim));
@@ -185,8 +186,8 @@ float GCN::get_l2_penalty() {
  * Train an epoch of the model
 */
 std::pair<float, float> GCN::train_epoch() {
-    // set_truth(1); // get the true labels for the dataset with split == 1 (train)
-
+    if (input_name == "citeseer")
+        set_input();
     for (auto m: modules) // iterate over the layer applying a forward pass
         m->forward(true);
 
@@ -205,7 +206,8 @@ std::pair<float, float> GCN::train_epoch() {
  * current_split == 3 --> test
 */
 std::pair<float, float> GCN::eval(int current_split) {
-    // set_truth(current_split);
+    if (input_name == "citeseer")
+        set_input();
     for (auto m: modules)
         m->forward(false);
     float test_loss = loss + get_l2_penalty();

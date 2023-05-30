@@ -37,8 +37,9 @@ class GCN {
     std::pair<float, float> train_epoch();
     std::pair<float, float> eval(int current_split);
     GCNData *data;
+    std::string input_name;
 public:
-    GCN(GCNParams params, GCNData *data);
+    GCN(GCNParams params, GCNData *data, std::string input_name);
     GCN();
     GCNParams params;
     ~GCN();
