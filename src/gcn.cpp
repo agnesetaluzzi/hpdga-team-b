@@ -186,8 +186,8 @@ float GCN::get_l2_penalty() {
  * Train an epoch of the model
 */
 std::pair<float, float> GCN::train_epoch() {
-    if ()
-    set_input();
+    if (input_name == "citeseer")
+        set_input();
     for (auto m: modules) // iterate over the layer applying a forward pass
         m->forward(true);
 
@@ -206,7 +206,8 @@ std::pair<float, float> GCN::train_epoch() {
  * current_split == 3 --> test
 */
 std::pair<float, float> GCN::eval(int current_split) {
-    set_input();
+    if (input_name == "citeseer")
+        set_input();
     for (auto m: modules)
         m->forward(false);
     float test_loss = loss + get_l2_penalty();
