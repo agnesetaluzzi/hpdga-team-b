@@ -3,6 +3,7 @@
 #include "../include/timer.h"
 #include <vector>
 #define BLOCK_DIM 256
+#define EPOCH_NUM 100
 
 /* error handling for CUDA API functions */
 #define CHECK(call)                                                  \
@@ -29,6 +30,12 @@
     }
 
 float *input_data, *input_grad, *layer1_var1_data, *layer1_var1_grad, *layer1_var2_data, *layer1_var2_grad, *layer2_var1_data, *layer2_var1_grad, *output_data, *output_grad;
+int rand_calls = 0;
+int *keep_gpu;
+int *keep_h;
+int rand_call = 0;
+float *original_input_data;
+
 cudaStream_t stream1;
 
 // ################################################################################################################
@@ -556,7 +563,7 @@ void CrossEntropyLoss::forward(bool training) {
     CHECK(cudaDeviceSynchronize());
 
     CHECK(cudaMemcpy(&total_loss, total_loss_gpu, sizeof(float), cudaMemcpyDeviceToHost));
-	CHECK(cudaMemcpy(&count, count_gpu, sizeof(int), cudaMemcpyDeviceToHost));
+	  CHECK(cudaMemcpy(&count, count_gpu, sizeof(int), cudaMemcpyDeviceToHost));
 
     *loss = total_loss / count;
     if (training)
@@ -614,7 +621,6 @@ void ReLU::forward(bool training)
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 	
-    CHECK(cudaMemcpy(&in->data[0], layer1_var2_data, sizeof(float) * in->data.size(), cudaMemcpyDeviceToHost));
     CHECK(cudaMemcpy(mask, mask_gpu, in->data.size() * sizeof(bool), cudaMemcpyDeviceToHost));
 	
     timer_stop(TMR_RELU_FW);
@@ -667,9 +673,19 @@ Dropout::Dropout(Variable *in, float p, bool isFirst) : isFirst(isFirst)
     {
         CHECK(cudaMalloc(&input_data, in->data.size() * sizeof(float)));
         CHECK(cudaMalloc(&input_grad, in->grad.size() * sizeof(float)));
-    }
-    CHECK(cudaMalloc(&keep_gpu, in->data.size() * sizeof(bool)));
-    keep_h = (bool*)malloc(in->data.size() * sizeof(bool));
+  		  rand_calls += in->data.size();
+		    CHECK(cudaMalloc(&original_input_data, in->data.size() * sizeof(float)));
+		    CHECK(cudaMemcpy(original_input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+    }else{
+		    rand_calls += in->data.size();
+		    rand_calls *= EPOCH_NUM;
+		    keep_h = (int *)malloc(rand_calls * sizeof(int));
+		    for(int i = 0; i < rand_calls; i++){
+			      keep_h[i] = (int)RAND();
+		    }
+		    CHECK(cudaMalloc(&keep_gpu, rand_calls * sizeof(int)));
+		    CHECK(cudaMemcpy(keep_gpu, keep_h, sizeof(int) * rand_calls, cudaMemcpyHostToDevice));
+	  }
 }
 
 Dropout::~Dropout()
@@ -683,39 +699,47 @@ Dropout::~Dropout()
     CHECK(cudaFree(keep_gpu));
 }
 
-__global__ void gpu_dropout_forward(float *in_data, int *mask, const bool isMask, const int threshold, const int scale, const int idx_max, bool *keep)
+__global__ void gpu_set_original_input(float *in_data, float *original_input_data, const int idx_max)
+{
+    int i = threadIdx.x + blockIdx.x * blockDim.x;
+    if(i >= idx_max) return;
+	
+	in_data[i] = original_input_data[i];
+}
+
+__global__ void gpu_dropout_forward(float *in_data, int *mask, const bool isMask, const int threshold, const int scale, const int idx_max, int *keep, const int rand_call)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     if(i >= idx_max) return;
 
-    in_data[i] *= keep[i] ? scale : 0;
+    in_data[i] *= (keep[rand_call + i] >= threshold) ? scale : 0;
     if (isMask)
-        mask[i] = keep[i];
+        mask[i] = (keep[rand_call + i] >= threshold);
 }
 
 void Dropout::forward(bool training)
 {
     if (!training)
     {
-        if (isFirst)
-            CHECK(cudaMemcpy(input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+        if (isFirst){
+            //CHECK(cudaMemcpy(input_data, original_input_data, sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+			      dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+			      dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+			      gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
+			      CHECK_KERNELCALL();
+		    }
         return;
     }
     timer_start(TMR_DROPOUT_FW);
     const int threshold = int(p * MY_RAND_MAX);
     float scale = 1 / (1 - p);
 
-    for (int i = 0; i < in->data.size(); i++)
-    {
-
-        keep_h[i] = (int)RAND() >= threshold;
-    }
-
-    CHECK(cudaMemcpy(keep_gpu, keep_h, sizeof(bool) * in->data.size(), cudaMemcpyHostToDevice));
-
     if (isFirst)
     {
-        CHECK(cudaMemcpy(input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+        dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+		    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+		    gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
+		    CHECK_KERNELCALL();
     }
 
     bool isMask = false;
@@ -725,17 +749,16 @@ void Dropout::forward(bool training)
         isMask = true;
     }
     
-    
     dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
     dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
     if (isFirst)
-        gpu_dropout_forward<<<blocksPerGrid, threadsPerBlock>>>(input_data, mask_gpu, isMask, threshold, scale, in->data.size(), keep_gpu);
+        gpu_dropout_forward<<<blocksPerGrid, threadsPerBlock>>>(input_data, mask_gpu, isMask, threshold, scale, in->data.size(), keep_gpu, rand_call);
     else
-        gpu_dropout_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_data, mask_gpu, isMask, threshold, scale, in->data.size(), keep_gpu);
+        gpu_dropout_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_data, mask_gpu, isMask, threshold, scale, in->data.size(), keep_gpu, rand_call);
     CHECK_KERNELCALL();
+	  rand_call += in->data.size();
     CHECK(cudaDeviceSynchronize());
     timer_stop(TMR_DROPOUT_FW);
-
 }
 
 __global__ void gpu_dropout_backward(float *in_grad, int *mask, const int scale, const int idx_max)

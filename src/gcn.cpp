@@ -71,6 +71,7 @@ GCN::GCN(GCNParams params, GCNData *input_data) {
     input = &variables.back();
 
     // dropout
+	set_input();
     modules.push_back(new Dropout(input, params.dropout, true));
     variables.emplace_back(params.num_nodes * params.hidden_dim);
     Variable *layer1_var1 = &variables.back();
@@ -90,12 +91,12 @@ GCN::GCN(GCNParams params, GCNData *input_data) {
     modules.push_back(new ReLU(layer1_var2));
     
     // dropout
-    modules.push_back(new Dropout(layer1_var2, params.dropout, false));
-    variables.emplace_back(params.num_nodes * params.output_dim);
+	variables.emplace_back(params.num_nodes * params.output_dim);
     Variable *layer2_var1 = &variables.back();
     variables.emplace_back(params.hidden_dim * params.output_dim, true, true);
     Variable *layer2_weight = &variables.back();
     layer2_weight->glorot(params.hidden_dim, params.output_dim); // weights initilization
+    modules.push_back(new Dropout(layer1_var2, params.dropout, false));
     
     // dense matrix multiply
     modules.push_back(new Matmul(layer1_var2, layer2_weight, layer2_var1, params.num_nodes, params.hidden_dim, params.output_dim));
@@ -164,7 +165,7 @@ float GCN::get_l2_penalty() {
  * Train an epoch of the model
 */
 std::pair<float, float> GCN::train_epoch() {
-    set_input(); // set the input data
+    //set_input(); // set the input data
 
     set_truth(1); // get the true labels for the dataset with split == 1 (train)
 
@@ -186,7 +187,7 @@ std::pair<float, float> GCN::train_epoch() {
  * current_split == 3 --> test
 */
 std::pair<float, float> GCN::eval(int current_split) {
-    set_input();
+    //set_input();
     set_truth(current_split);
     for (auto m: modules)
         m->forward(false);
