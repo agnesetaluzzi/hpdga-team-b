@@ -2,6 +2,7 @@
 #include "../include/rand.h"
 #include "../include/timer.h"
 #include <vector>
+#include <cuda_fp16.h>
 #define BLOCK_DIM 256
 #define EPOCH_NUM 100
 
@@ -34,6 +35,7 @@ int rand_calls = 0;
 int *keep_gpu;
 int *keep_h;
 int rand_call = 0;
+int epoch = 0;
 float *original_input_data;
 
 cudaStream_t stream1;
@@ -190,44 +192,44 @@ void Matmul::backward()
 
     if (m < 20000)
     {
-         int multiple32 = m + 32 - 1;
-         multiple32 -= (multiple32 % 32);
+        int multiple32 = m + 32 - 1;
+        multiple32 -= (multiple32 % 32);
 
-         dim3 blocksPerGrid0((n * p + BLOCK_DIM - 1) / BLOCK_DIM, multiple32, 1);
-         dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
-         gpu_matmul_backward2_copy<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var2_grad, layer1_var2_data, layer2_var1_grad, m, n, p, b_sum);
-         CHECK_KERNELCALL();
+        dim3 blocksPerGrid0((n * p + BLOCK_DIM - 1) / BLOCK_DIM, multiple32, 1);
+        dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
+        gpu_matmul_backward2_copy<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var2_grad, layer1_var2_data, layer2_var1_grad, m, n, p, b_sum);
+        CHECK_KERNELCALL();
 
-         dim3 blocksPerGridSum((n * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-         dim3 threadsPerBlockSum(BLOCK_DIM, 1, 1);
+        dim3 blocksPerGridSum((n * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+        dim3 threadsPerBlockSum(BLOCK_DIM, 1, 1);
 
-         int dim = m;
-         int dim2 = m;
+        int dim = m;
+        int dim2 = m;
 
-         for (int x = 0; x < ceil(log2(m)); x++)
-         {
-             dim2 = ceil(dim2 / 2.0);
-             multiple32 = dim2 + 32 - 1;
-             multiple32 -= (dim2 % 32);
-             blocksPerGridSum.y = multiple32;
-             gpu_matmul_backward2_sum<<<blocksPerGridSum, threadsPerBlockSum>>>(b_sum, dim, dim2, m, n, p);
-             CHECK_KERNELCALL();
-             dim = dim2;
-         }
+        for (int x = 0; x < ceil(log2(m)); x++)
+        {
+            dim2 = ceil(dim2 / 2.0);
+            multiple32 = dim2 + 32 - 1;
+            multiple32 -= (dim2 % 32);
+            blocksPerGridSum.y = multiple32;
+            gpu_matmul_backward2_sum<<<blocksPerGridSum, threadsPerBlockSum>>>(b_sum, dim, dim2, m, n, p);
+            CHECK_KERNELCALL();
+            dim = dim2;
+        }
 
-         dim3 blocksPerGrid2((n * p + BLOCK_DIM - 1), 1, 1);
-         dim3 threadsPerBlock2(BLOCK_DIM, 1, 1);
-         gpu_matmul_backward2<<<blocksPerGrid2, threadsPerBlock2>>>(b_grad, n, p, b_sum);
-         CHECK_KERNELCALL();
-         CHECK(cudaDeviceSynchronize());
+        dim3 blocksPerGrid2((n * p + BLOCK_DIM - 1), 1, 1);
+        dim3 threadsPerBlock2(BLOCK_DIM, 1, 1);
+        gpu_matmul_backward2<<<blocksPerGrid2, threadsPerBlock2>>>(b_grad, n, p, b_sum);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
     }
     else
     {
-         dim3 blocksPerGrid2((n * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-         dim3 threadsPerBlock2(BLOCK_DIM, 1, 1);
-         gpu_matmul_backward3<<<blocksPerGrid2, threadsPerBlock2>>>(b_grad, layer1_var2_data, layer2_var1_grad, m, n, p);
-         CHECK_KERNELCALL();
-         CHECK(cudaDeviceSynchronize());
+        dim3 blocksPerGrid2((n * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+        dim3 threadsPerBlock2(BLOCK_DIM, 1, 1);
+        gpu_matmul_backward3<<<blocksPerGrid2, threadsPerBlock2>>>(b_grad, layer1_var2_data, layer2_var1_grad, m, n, p);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
     }
 
     CHECK(cudaMemcpy(&a->grad[0], layer1_var2_grad, sizeof(float) * a->grad.size(), cudaMemcpyDeviceToHost));
@@ -486,13 +488,18 @@ void GraphSum::backward()
  * Each predicted class probability is compared to the actual class desired and a loss is computed to penalize the proabability based on how far it is with respect to the actual expected value.
  * Also called logaritmic loss. 
 */
-CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth, float *loss, int num_classes) :
-        logits(logits), truth(truth), loss(loss), num_classes(num_classes) 
+CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth_training, int *truth_validation, int *truth_testing, float *loss, int num_classes) :
+        logits(logits), truth_training(truth_training), truth_validation(truth_validation), truth_testing(truth_testing), loss(loss), num_classes(num_classes) 
 {
     CHECK(cudaMalloc(&count_gpu, sizeof(int)));
     CHECK(cudaMalloc(&total_loss_gpu, sizeof(float)));
 
-    CHECK(cudaMalloc(&truth_gpu, sizeof(int) * (logits->data.size() / num_classes)));
+    CHECK(cudaMalloc(&truth_training_gpu, sizeof(int) * (logits->data.size() / num_classes)));
+    CHECK(cudaMalloc(&truth_validation_gpu, sizeof(int) * (logits->data.size() / num_classes)));
+    CHECK(cudaMalloc(&truth_testing_gpu, sizeof(int) * (logits->data.size() / num_classes)));
+    CHECK(cudaMemcpy(truth_training_gpu, truth_training, sizeof(int) * (logits->data.size() / num_classes), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(truth_validation_gpu, truth_validation, sizeof(int) * (logits->data.size() / num_classes), cudaMemcpyHostToDevice));
+    CHECK(cudaMemcpy(truth_testing_gpu, truth_testing, sizeof(int) * (logits->data.size() / num_classes), cudaMemcpyHostToDevice));
 }
 
 CrossEntropyLoss::~CrossEntropyLoss()
@@ -507,6 +514,7 @@ CrossEntropyLoss::~CrossEntropyLoss()
     CHECK(cudaFree(layer2_var1_grad));
     CHECK(cudaFree(output_data));
     CHECK(cudaFree(output_grad));
+    CHECK(cudaFree(original_input_data));
 }
 
 __global__ void gpu_cross_entropy_loss_forward1(int *truth, int *count, float *logits_data, float *total_loss, float *logits_grad, const bool training, const int idx_max, const int num_classes){
@@ -553,17 +561,30 @@ void CrossEntropyLoss::forward(bool training) {
     int count = 0;
     CHECK(cudaMemset(count_gpu, 0, sizeof(int)));
     CHECK(cudaMemset(total_loss_gpu, 0.0, sizeof(float)));
-    
-    CHECK(cudaMemcpy(truth_gpu, truth, sizeof(int) * (logits->data.size() / num_classes), cudaMemcpyHostToDevice));
 
     dim3 blocksPerGrid(((logits->data.size() / num_classes) + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
     dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-    gpu_cross_entropy_loss_forward1<<<blocksPerGrid, threadsPerBlock>>>(truth_gpu, count_gpu, output_data, total_loss_gpu, output_grad, training, (logits->data.size() / num_classes), num_classes);
+    if (training)
+    {
+        gpu_cross_entropy_loss_forward1<<<blocksPerGrid, threadsPerBlock>>>(truth_training_gpu, count_gpu, output_data, total_loss_gpu, output_grad, training, (logits->data.size() / num_classes), num_classes);
+    }
+    else
+    {
+        if (epoch < 100)
+        {
+            gpu_cross_entropy_loss_forward1<<<blocksPerGrid, threadsPerBlock>>>(truth_validation_gpu, count_gpu, output_data, total_loss_gpu, output_grad, training, (logits->data.size() / num_classes), num_classes);
+            epoch++;
+        }
+        else
+        {
+            gpu_cross_entropy_loss_forward1<<<blocksPerGrid, threadsPerBlock>>>(truth_testing_gpu, count_gpu, output_data, total_loss_gpu, output_grad, training, (logits->data.size() / num_classes), num_classes);
+        }
+    }
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
     CHECK(cudaMemcpy(&total_loss, total_loss_gpu, sizeof(float), cudaMemcpyDeviceToHost));
-	  CHECK(cudaMemcpy(&count, count_gpu, sizeof(int), cudaMemcpyDeviceToHost));
+	CHECK(cudaMemcpy(&count, count_gpu, sizeof(int), cudaMemcpyDeviceToHost));
 
     *loss = total_loss / count;
     if (training)
@@ -673,19 +694,22 @@ Dropout::Dropout(Variable *in, float p, bool isFirst) : isFirst(isFirst)
     {
         CHECK(cudaMalloc(&input_data, in->data.size() * sizeof(float)));
         CHECK(cudaMalloc(&input_grad, in->grad.size() * sizeof(float)));
-  		  rand_calls += in->data.size();
-		    CHECK(cudaMalloc(&original_input_data, in->data.size() * sizeof(float)));
-		    CHECK(cudaMemcpy(original_input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
-    }else{
-		    rand_calls += in->data.size();
-		    rand_calls *= EPOCH_NUM;
-		    keep_h = (int *)malloc(rand_calls * sizeof(int));
-		    for(int i = 0; i < rand_calls; i++){
-			      keep_h[i] = (int)RAND();
-		    }
-		    CHECK(cudaMalloc(&keep_gpu, rand_calls * sizeof(int)));
-		    CHECK(cudaMemcpy(keep_gpu, keep_h, sizeof(int) * rand_calls, cudaMemcpyHostToDevice));
-	  }
+        rand_calls += in->data.size();
+        CHECK(cudaMalloc(&original_input_data, in->data.size() * sizeof(float)));
+        CHECK(cudaMemcpy(original_input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+    }
+    else
+    {
+        rand_calls += in->data.size();
+        rand_calls *= EPOCH_NUM;
+        keep_h = (int *)malloc(rand_calls * sizeof(int));
+        for (int i = 0; i < rand_calls; i++)
+        {
+            keep_h[i] = (int)RAND();
+        }
+        CHECK(cudaMalloc(&keep_gpu, rand_calls * sizeof(int)));
+        CHECK(cudaMemcpy(keep_gpu, keep_h, sizeof(int) * rand_calls, cudaMemcpyHostToDevice));
+    }
 }
 
 Dropout::~Dropout()
@@ -721,13 +745,13 @@ void Dropout::forward(bool training)
 {
     if (!training)
     {
-        if (isFirst){
-            //CHECK(cudaMemcpy(input_data, original_input_data, sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
-			      dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-			      dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-			      gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
-			      CHECK_KERNELCALL();
-		    }
+        if (isFirst)
+        {
+            dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+            dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+            gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
+            CHECK_KERNELCALL();
+		}
         return;
     }
     timer_start(TMR_DROPOUT_FW);
@@ -737,9 +761,9 @@ void Dropout::forward(bool training)
     if (isFirst)
     {
         dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-		    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-		    gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
-		    CHECK_KERNELCALL();
+		dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+		gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
+		CHECK_KERNELCALL();
     }
 
     bool isMask = false;
@@ -756,7 +780,7 @@ void Dropout::forward(bool training)
     else
         gpu_dropout_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_data, mask_gpu, isMask, threshold, scale, in->data.size(), keep_gpu, rand_call);
     CHECK_KERNELCALL();
-	  rand_call += in->data.size();
+	rand_call += in->data.size();
     CHECK(cudaDeviceSynchronize());
     timer_stop(TMR_DROPOUT_FW);
 }

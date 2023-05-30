@@ -105,10 +105,13 @@ GCN::GCN(GCNParams params, GCNData *input_data) {
     
     // graph sum
     modules.push_back(new GraphSum(layer2_var1, output, &data->graph, params.output_dim, false));
-    truth = std::vector<int>(params.num_nodes);
+    truth_training = std::vector<int>(params.num_nodes);
+    truth_validation = std::vector<int>(params.num_nodes);
+    truth_testing = std::vector<int>(params.num_nodes);
     
     // cross entropy loss
-    modules.push_back(new CrossEntropyLoss(output, truth.data(), &loss, params.output_dim));
+    set_truth();
+    modules.push_back(new CrossEntropyLoss(output, truth_training.data(), truth_validation.data(), truth_testing.data(), &loss, params.output_dim));
     
     // Adam optimization algorithm (alternative to the classical stochastic gradient descent)
     AdamParams adam_params = AdamParams::get_default();
@@ -129,19 +132,36 @@ void GCN::set_input() {
 }
 
 // set the label of each node inside of the current_split (validation/train/test)
-void GCN::set_truth(int current_split) {
+void GCN::set_truth() {
     for(int i = 0; i < params.num_nodes; i++)
+    {
         // truth[i] is the real label of "i"
-        truth[i] = data->split[i] == current_split ? data->label[i] : -1;
+        truth_training[i] = data->split[i] == 1 ? data->label[i] : -1;
+        truth_validation[i] = data->split[i] == 2 ? data->label[i] : -1;
+        truth_testing[i] = data->split[i] == 3 ? data->label[i] : -1;
+    }
 }
 
 // get the current accuracy of the model
-float GCN::get_accuracy() {
+float GCN::get_accuracy(int current_split) {
     int wrong = 0, total = 0;
+    int cur_truth;
     for(int i = 0; i < params.num_nodes; i++) {
-        if(truth[i] < 0) continue;
+        switch (current_split)
+        {
+        case (1):
+            cur_truth = truth_training[i];
+            break;
+        case (2):
+            cur_truth = truth_validation[i];
+            break;
+        case (3):
+            cur_truth = truth_testing[i];
+            break;
+        }
+        if(cur_truth < 0) continue;
         total++;
-        float truth_logit = output->data[i * params.output_dim + truth[i]];
+        float truth_logit = output->data[i * params.output_dim + cur_truth];
         for(int j = 0; j < params.output_dim; j++)
             if (output->data[i * params.output_dim + j] > truth_logit) {
                 wrong++;
@@ -165,15 +185,13 @@ float GCN::get_l2_penalty() {
  * Train an epoch of the model
 */
 std::pair<float, float> GCN::train_epoch() {
-    //set_input(); // set the input data
-
-    set_truth(1); // get the true labels for the dataset with split == 1 (train)
+    // set_truth(1); // get the true labels for the dataset with split == 1 (train)
 
     for (auto m: modules) // iterate over the layer applying a forward pass
         m->forward(true);
 
     float train_loss = loss + get_l2_penalty(); // correct the loss with the l2 regularization
-    float train_acc = get_accuracy(); // compute the accuracy comparing the prediction against the truth
+    float train_acc = get_accuracy(1); // compute the accuracy comparing the prediction against the truth
     for (int i = modules.size() - 1; i >= 0; i--) // do a backward pass on the layers
         modules[i]->backward();
 
@@ -187,12 +205,11 @@ std::pair<float, float> GCN::train_epoch() {
  * current_split == 3 --> test
 */
 std::pair<float, float> GCN::eval(int current_split) {
-    //set_input();
-    set_truth(current_split);
+    // set_truth(current_split);
     for (auto m: modules)
         m->forward(false);
     float test_loss = loss + get_l2_penalty();
-    float test_acc = get_accuracy();
+    float test_acc = get_accuracy(current_split);
     return {test_loss, test_acc};
 }
 

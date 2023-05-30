@@ -25,12 +25,14 @@ class GCN {
     std::vector<Module*> modules;
     std::vector<Variable> variables;
     Variable *input, *output;
-    std::vector<int> truth;
+    std::vector<int> truth_training;
+    std::vector<int> truth_validation;
+    std::vector<int> truth_testing;
     Adam optimizer;
     float loss;
     void set_input();
-    void set_truth(int current_split);
-    float get_accuracy();
+    void set_truth();
+    float get_accuracy(int current_split);
     float get_l2_penalty();
     std::pair<float, float> train_epoch();
     std::pair<float, float> eval(int current_split);
