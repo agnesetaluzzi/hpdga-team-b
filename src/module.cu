@@ -3,7 +3,6 @@
 #include "../include/timer.h"
 #include <vector>
 #define BLOCK_DIM 256
-#define EPOCH_NUM 100
 
 /* error handling for CUDA API functions */
 #define CHECK(call)                                                  \
@@ -676,7 +675,7 @@ void ReLU::backward()
  * The dropout layer randomly sets input units to 0 with a frequency of P at each step during training time to prevent overfitting.
  * Inputs that are not set to 0 are scaled up by 1/(1-P).
  */
-Dropout::Dropout(Variable *in, float p, bool isFirst) : isFirst(isFirst)
+Dropout::Dropout(Variable *in, float p, bool isFirst, std::string input_name) : isFirst(isFirst), input_name(input_name)
 {
     this->in = in;
     this->p = p;
@@ -695,28 +694,33 @@ Dropout::Dropout(Variable *in, float p, bool isFirst) : isFirst(isFirst)
         CHECK(cudaMalloc(&input_data, in->data.size() * sizeof(float)));
         CHECK(cudaMalloc(&input_grad, in->grad.size() * sizeof(float)));
         max_dim_dropout = in->data.size();
-        CHECK(cudaMalloc(&original_input_data, in->data.size() * sizeof(float)));
-        CHECK(cudaMemcpy(original_input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+        if (input_name != "citeseer") 
+        {
+            CHECK(cudaMalloc(&original_input_data, in->data.size() * sizeof(float)));
+            CHECK(cudaMemcpy(original_input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+        }
     }
     else
     {
-	srand(time(NULL));
-	if(in->data.size() > max_dim_dropout) max_dim_dropout = in->data.size();
+        srand(time(NULL));
+        if (in->data.size() > max_dim_dropout)
+            max_dim_dropout = in->data.size();
         rand1 = (unsigned long long *)malloc(max_dim_dropout * sizeof(unsigned long long));
-	rand2 = (unsigned long long *)malloc(max_dim_dropout * sizeof(unsigned long long));
+        rand2 = (unsigned long long *)malloc(max_dim_dropout * sizeof(unsigned long long));
         for (int i = 0; i < max_dim_dropout; i++)
         {
-	    rand1[i] = rand();
-	    rand2[i] = rand();
-	    while(rand1[i] == 0 || rand2[i] == 0){
-		rand1[i] = rand();
-		rand2[i] = rand();
-	    }
+            rand1[i] = rand();
+            rand2[i] = rand();
+            while (rand1[i] == 0 || rand2[i] == 0)
+            {
+                rand1[i] = rand();
+                rand2[i] = rand();
+            }
         }
         CHECK(cudaMalloc(&rand1_gpu, max_dim_dropout * sizeof(unsigned long long)));
-	CHECK(cudaMalloc(&rand2_gpu, max_dim_dropout * sizeof(unsigned long long)));
+        CHECK(cudaMalloc(&rand2_gpu, max_dim_dropout * sizeof(unsigned long long)));
         CHECK(cudaMemcpy(rand1_gpu, rand1, max_dim_dropout * sizeof(unsigned long long), cudaMemcpyHostToDevice));
-	CHECK(cudaMemcpy(rand2_gpu, rand2, max_dim_dropout * sizeof(unsigned long long), cudaMemcpyHostToDevice));
+        CHECK(cudaMemcpy(rand2_gpu, rand2, max_dim_dropout * sizeof(unsigned long long), cudaMemcpyHostToDevice));
     }
 }
 
@@ -764,10 +768,16 @@ void Dropout::forward(bool training)
     {
         if (isFirst)
         {
-            dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-            dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-            gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
-            CHECK_KERNELCALL();
+            if (input_name != "citeseer")
+            {
+                dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+                dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+                gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
+                CHECK_KERNELCALL();
+            }
+            else {
+                CHECK(cudaMemcpy(input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+            }
 	}
         return;
     }
@@ -777,10 +787,17 @@ void Dropout::forward(bool training)
 
     if (isFirst)
     {
-        dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-	dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-	gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
-	CHECK_KERNELCALL();
+        if (input_name != "citeseer")
+        {
+            dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+            dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+            gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
+            CHECK_KERNELCALL();
+        }
+        else
+        {
+            CHECK(cudaMemcpy(input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
+        }
     }
 
     bool isMask = false;
