@@ -3,6 +3,7 @@
 #include "../include/timer.h"
 #include <vector>
 #define BLOCK_DIM 256
+#define TILE_WIDTH 32
 
 /* error handling for CUDA API functions */
 #define CHECK(call)                                                  \
@@ -88,15 +89,66 @@ __global__ void gpu_matmul_forward(float *a_data, float *b_data, float *c_data, 
     c_data[i * p + k] = local_vars[thread_id];
 }
 
+__global__ void gpu_matmul_forward2(float *a, float *b, float *c, int a_rows, int a_columns, int b_rows, int b_columns, int c_rows, int c_columns)
+{
+    __shared__ float shared_a[TILE_WIDTH][TILE_WIDTH];
+    __shared__ float shared_b[TILE_WIDTH][TILE_WIDTH];
+
+    int row = blockDim.y * blockIdx.y + threadIdx.y;
+    int col = blockDim.x * blockIdx.x + threadIdx.x;
+    float c_val = 0.0;
+    shared_a[threadIdx.y][threadIdx.x] = 0.0;
+    shared_b[threadIdx.y][threadIdx.x] = 0.0;
+
+    for (int ph = 0; ph < (((a_columns - 1) / TILE_WIDTH) + 1); ph++)
+    {
+        if (row < a_rows && (threadIdx.x + (ph * TILE_WIDTH)) < a_columns)
+        {
+            shared_a[threadIdx.y][threadIdx.x] = a[(row * a_columns) + threadIdx.x + (ph * TILE_WIDTH)];
+        }
+        else
+        {
+            shared_a[threadIdx.y][threadIdx.x] = 0.0;
+        }
+        if (col < b_columns && (threadIdx.y + ph * TILE_WIDTH) < b_rows)
+        {
+            shared_b[threadIdx.y][threadIdx.x] = b[(threadIdx.y + ph * TILE_WIDTH) * b_columns + col];
+        }
+        else
+        {
+            shared_b[threadIdx.y][threadIdx.x] = 0.0;
+        }
+        __syncthreads();
+
+        for (int j = 0; j < TILE_WIDTH; ++j)
+        {
+            c_val += shared_a[threadIdx.y][j] * shared_b[j][threadIdx.x];
+        }
+    }
+    if (row < c_rows && col < c_columns)
+    {
+        c[row * c_columns + col] = c_val;
+    }
+}
+
 void Matmul::forward(bool training)
 {
     timer_start(TMR_MATMUL_FW);
 
     CHECK(cudaMemcpy(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice));
 
-    dim3 blocksPerGrid((m * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-    dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-    gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_data, b_data, layer2_var1_data, m, n, p);
+    if (m < 20000)
+    {
+        dim3 blocksPerGrid((m * p + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+        dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+        gpu_matmul_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_data, b_data, layer2_var1_data, m, n, p);
+    }
+    else
+    {
+        dim3 blocksPerGrid((p / TILE_WIDTH) + 1, (m / TILE_WIDTH) + 1, 1);
+        dim3 threadsPerBlock(TILE_WIDTH, TILE_WIDTH, 1);
+        gpu_matmul_forward2<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_data, b_data, layer2_var1_data, m, n, n, p, m, p);
+    }
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
 
@@ -422,8 +474,8 @@ void GraphSum::forward(bool training)
     else
     {
         CHECK(cudaMemcpy(&out->data[0], output_data, sizeof(float) * out->data.size(), cudaMemcpyDeviceToHost));
-        timer_stop(TMR_GRAPHSUM_FW);
     }
+    timer_stop(TMR_GRAPHSUM_FW);
 }
 
 __global__ void gpu_graph_sum_backward_zero(float *in_grad, float *out_grad, int *graph_indptr, int *graph_indices, const int dim, const int idx_max)
