@@ -1,5 +1,15 @@
 #include "../include/kernels.cuh"
 
+__global__ void gpu_zero(float *x, const int n_cols, const int idx_max)
+{
+    int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if(idx >= idx_max) return;
+    int i = idx / n_cols;
+    int j = idx % n_cols;
+
+    x[i * n_cols + j] = 0;
+}
+
 __global__ void gpu_matmul_forward(float *a_data, float *b_data, float *c_data, const int m, const int n, const int p)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
@@ -101,7 +111,8 @@ __global__ void gpu_matmul_backward2(float *b_grad, const int n, const int p, fl
     b_grad[j * p + k] = values[j * p + k];
 }
 
-__global__ void gpu_matmul_backward2_sum(float *values, const int dim, const int dim2, const int m, const int n, const int p){
+__global__ void gpu_matmul_backward2_sum(float *values, const int dim, const int dim2, const int m, const int n, const int p)
+{
     int pos = blockIdx.y;
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if(idx >= n * p || pos >= dim2) return;
@@ -155,8 +166,7 @@ __global__ void gpu_sparse_matmul_forward(int *i_index, float *a_data, float *b_
     c_data[i * p + k] = local_vars[thread_id];
 }
 
-
-__global__ void gpu_sparse_matmul_backward(int *i_index, float *a_data, float *b_grad, float *c_grad, int *sp_indptr, int *sp_indices, const int p, const int idx_max)
+__global__ void gpu_sparse_matmul_backward(float *a_data, float *b_grad, float *c_grad, int *sp_indptr, int *sp_indices, const int p, const int idx_max)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if(idx >= idx_max) return;
@@ -168,16 +178,6 @@ __global__ void gpu_sparse_matmul_backward(int *i_index, float *a_data, float *b
         int j = sp_indices[jj];
         atomicAdd(&b_grad[j * p + k], c_grad[i * p + k] * a_data[jj]);
     }
-}
-
-__global__ void gpu_graph_sum_forward_zero(float *in_data, float *out_data, int *graph_indptr, int *graph_indices, const int dim, const int idx_max)
-{
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx >= idx_max) return;
-    int src = idx / dim;
-    int j = idx % dim;
-
-    out_data[src * dim + j] = 0;
 }
 
 __global__ void gpu_graph_sum_forward(float *in_data, float *out_data, int *graph_indptr, int *graph_indices, const int dim, const int length, const int idx_max)
@@ -216,16 +216,6 @@ __global__ void gpu_graph_sum_forward2(int *src_index, float *in_data, float *ou
 	    sum += coef * in_data[dst * dim + j];
     }
 	out_data[src * dim + j] = sum;
-}
-
-__global__ void gpu_graph_sum_backward_zero(float *in_grad, float *out_grad, int *graph_indptr, int *graph_indices, const int dim, const int idx_max)
-{
-    int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if(idx >= idx_max) return;
-    int src = idx / dim;
-    int j = idx % dim;
-
-    in_grad[src * dim + j] = 0;
 }
 
 __global__ void gpu_graph_sum_backward(float *in_grad, float *out_grad, int *graph_indptr, int *graph_indices, const int dim, const int length, const int idx_max)
@@ -268,7 +258,6 @@ __global__ void gpu_graph_sum_backward2(int *src_index, float *in_grad, float *o
     in_grad[src * dim + j] = sum;
 }
 
-
 __global__ void gpu_cross_entropy_loss_forward1(int *truth, int *count, float *logits_data, float *total_loss, float *logits_grad, const bool training, const int idx_max, const int num_classes)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
@@ -307,7 +296,6 @@ __global__ void gpu_cross_entropy_loss_forward2(float *logits_grad, const int co
     logits_grad[i] /= count;
 }
 
-
 __global__ void gpu_relu_forward(float *in_data, bool *mask, const bool training, const int idx_max)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
@@ -328,7 +316,6 @@ __global__ void gpu_relu_backward(float *in_grad, bool *mask, const int idx_max)
     if (!mask[i])
         in_grad[i] = 0;
 }
-
 
 __global__ void gpu_set_original_input(float *in_data, float *original_input_data, const int idx_max)
 {
