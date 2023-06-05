@@ -32,7 +32,7 @@
 
 float *input_data, *input_grad, *layer1_var1_data, *layer1_var1_grad, *layer1_var2_data, *layer1_var2_grad, *layer2_var1_data, *layer2_var1_grad, *output_data, *output_grad;
 int max_dim_dropout = 0;
-unsigned long long *rand1, *rand2;
+//unsigned long long *rand1, *rand2;
 unsigned long long *rand1_gpu, *rand2_gpu;
 int epoch = 0;
 float *original_input_data;
@@ -658,6 +658,8 @@ CrossEntropyLoss::~CrossEntropyLoss()
     CHECK(cudaFree(original_input_data));
     CHECK(cudaFree(rand1_gpu));
 	CHECK(cudaFree(rand2_gpu));
+	CHECK(cudaFree(src_index));
+	CHECK(cudaFree(i_index));
 }
 
 __global__ void gpu_cross_entropy_loss_forward1(int *truth, int *count, float *logits_data, float *total_loss, float *logits_grad, const bool training, const int idx_max, const int num_classes){
@@ -849,6 +851,7 @@ Dropout::Dropout(Variable *in, float p, bool isFirst, std::string input_name) : 
         srand(time(NULL));
         if (in->data.size() > max_dim_dropout)
             max_dim_dropout = in->data.size();
+		unsigned long long *rand1, *rand2;
         rand1 = (unsigned long long *)malloc(max_dim_dropout * sizeof(unsigned long long));
         rand2 = (unsigned long long *)malloc(max_dim_dropout * sizeof(unsigned long long));
         for (int i = 0; i < max_dim_dropout; i++)
