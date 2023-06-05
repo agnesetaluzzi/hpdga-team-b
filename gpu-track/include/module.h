@@ -30,6 +30,7 @@ class SparseMatmul: public Module {
     float *a_data, *b_data, *c_data;
     float *b_grad, *c_grad;
     int *sp_indptr, *sp_indices;
+    int *i_index;
 public:
     SparseMatmul(Variable *a, Variable *b, Variable *c, SparseIndex *sp, int m, int n, int p);
     ~SparseMatmul();
