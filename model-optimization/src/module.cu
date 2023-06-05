@@ -362,8 +362,8 @@ void GraphSum::backward()
  * Each predicted class probability is compared to the actual class desired and a loss is computed to penalize the proabability based on how far it is with respect to the actual expected value.
  * Also called logaritmic loss. 
 */
-CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth_training, int *truth_validation, int *truth_testing, float *loss, int num_classes) :
-        logits(logits), truth_training(truth_training), truth_validation(truth_validation), truth_testing(truth_testing), loss(loss), num_classes(num_classes) 
+CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth_training, int *truth_validation, int *truth_testing, float *loss, int num_classes, int num_epochs) :
+        logits(logits), truth_training(truth_training), truth_validation(truth_validation), truth_testing(truth_testing), loss(loss), num_classes(num_classes),  num_epochs(num_epochs)
 {
     CHECK(cudaMalloc(&count_gpu, sizeof(int)));
     CHECK(cudaMalloc(&total_loss_gpu, sizeof(float)));
@@ -410,7 +410,7 @@ void CrossEntropyLoss::forward(bool training) {
     }
     else
     {
-        if (epoch < 100)
+        if (epoch < num_epochs)
         {
             gpu_cross_entropy_loss_forward1<<<blocksPerGrid, threadsPerBlock>>>(truth_validation_gpu, count_gpu, output_data, total_loss_gpu, output_grad, training, (logits->data.size() / num_classes), num_classes);
             epoch++;

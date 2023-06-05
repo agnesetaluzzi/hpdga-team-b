@@ -112,7 +112,7 @@ GCN::GCN(GCNParams params, GCNData *input_data, std::string input_name) : input_
     
     // cross entropy loss
     set_truth();
-    modules.push_back(new CrossEntropyLoss(output, truth_training.data(), truth_validation.data(), truth_testing.data(), &loss, params.output_dim));
+    modules.push_back(new CrossEntropyLoss(output, truth_training.data(), truth_validation.data(), truth_testing.data(), &loss, params.output_dim, params.epochs));
     
     // Adam optimization algorithm (alternative to the classical stochastic gradient descent)
     AdamParams adam_params = AdamParams::get_default();

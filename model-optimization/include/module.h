@@ -66,8 +66,9 @@ class CrossEntropyLoss: public Module {
     int *truth_validation_gpu;
     int *truth_testing_gpu;
     float *total_loss_gpu;
+    int num_epochs;
 public:
-    CrossEntropyLoss(Variable *logits, int *truth_training, int *truth_validation, int *truth_testing, float *loss, int num_classes);
+    CrossEntropyLoss(Variable *logits, int *truth_training, int *truth_validation, int *truth_testing, float *loss, int num_classes, int num_epochs);
     ~CrossEntropyLoss();
     void forward(bool);
     void backward();
