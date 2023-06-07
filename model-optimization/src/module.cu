@@ -448,14 +448,12 @@ void CrossEntropyLoss::backward() {
 ReLU::ReLU(Variable *in)
 {
     this->in = in;
-    mask = new bool[in->data.size()];
 	
     CHECK(cudaMalloc(&mask_gpu, in->data.size() * sizeof(bool)));
 }
 
 ReLU::~ReLU()
 {
-    delete[] mask;
     CHECK(cudaFree(mask_gpu));
 }
 
