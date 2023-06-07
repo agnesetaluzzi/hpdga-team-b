@@ -497,12 +497,7 @@ Dropout::Dropout(Variable *in, float p, bool isFirst, std::string input_name) : 
     this->p = p;
     if (!in->grad.empty())
     {
-        mask = new int[in->data.size()];
-        CHECK(cudaMalloc(&mask_gpu, in->data.size() * sizeof(int)));
-    }
-    else
-    {
-        mask = nullptr;
+        CHECK(cudaMalloc(&mask_gpu, in->data.size() * sizeof(bool)));
     }
 
     if (isFirst)
@@ -543,9 +538,8 @@ Dropout::Dropout(Variable *in, float p, bool isFirst, std::string input_name) : 
 
 Dropout::~Dropout()
 {
-    if (mask)
+    if (!in->grad.empty())
     {
-        delete[] mask;
         CHECK(cudaFree(mask_gpu));
     }
 }
@@ -585,7 +579,7 @@ void Dropout::forward(bool training)
     }
 
     bool isMask = false;
-    if (mask)
+    if (!in->grad.empty())
     {
         isMask = true;
     }
@@ -603,7 +597,7 @@ void Dropout::forward(bool training)
 
 void Dropout::backward()
 {
-    if (!mask)
+    if (in->grad.empty())
         return;
     
     timer_start(TMR_DROPOUT_BW);

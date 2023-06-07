@@ -88,10 +88,9 @@ public:
 
 class Dropout: public Module {
     Variable *in;
-    int *mask;
     float p;
     bool isFirst;
-    int *mask_gpu;
+    bool *mask_gpu;
     std::string input_name;
 public:
     Dropout(Variable *in, float p, bool isFirst, std::string input_name);

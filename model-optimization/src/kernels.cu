@@ -325,7 +325,7 @@ __global__ void gpu_set_original_input(float *in_data, float *original_input_dat
     in_data[i] = original_input_data[i];
 }
 
-__global__ void gpu_dropout_forward(float *in_data, int *mask, const bool isMask, const int threshold, const int scale, const int idx_max, unsigned long long *rand1, unsigned long long *rand2)
+__global__ void gpu_dropout_forward(float *in_data, bool *mask, const bool isMask, const int threshold, const int scale, const int idx_max, unsigned long long *rand1, unsigned long long *rand2)
 {
     int i = threadIdx.x + blockIdx.x * blockDim.x;
     if(i >= idx_max) return;
@@ -345,7 +345,7 @@ __global__ void gpu_dropout_forward(float *in_data, int *mask, const bool isMask
         mask[i] = (rand >= threshold);
 }
 
-__global__ void gpu_dropout_backward(float *in_grad, int *mask, const int scale, const int idx_max)
+__global__ void gpu_dropout_backward(float *in_grad, bool *mask, const int scale, const int idx_max)
 {
     int idx = threadIdx.x + blockIdx.x * blockDim.x;
     if(idx >= idx_max) return;

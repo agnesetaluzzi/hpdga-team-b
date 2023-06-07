@@ -28,8 +28,8 @@ __global__ void gpu_relu_forward(float *in_data, bool *mask, const bool training
 __global__ void gpu_relu_backward(float *in_grad, bool *mask, const int idx_max);
 
 __global__ void gpu_set_original_input(float *in_data, float *original_input_data, const int idx_max);
-__global__ void gpu_dropout_forward(float *in_data, int *mask, const bool isMask, const int threshold, const int scale, const int idx_max, unsigned long long *rand1, unsigned long long *rand2);
-__global__ void gpu_dropout_backward(float *in_grad, int *mask, const int scale, const int idx_max);
+__global__ void gpu_dropout_forward(float *in_data, bool *mask, const bool isMask, const int threshold, const int scale, const int idx_max, unsigned long long *rand1, unsigned long long *rand2);
+__global__ void gpu_dropout_backward(float *in_grad, bool *mask, const int scale, const int idx_max);
 
 #define RAND_H
 #endif
