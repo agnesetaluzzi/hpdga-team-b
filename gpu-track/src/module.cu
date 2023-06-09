@@ -53,7 +53,7 @@ Matmul::Matmul(Variable *a, Variable *b, Variable *c, int m, int n, int p) : a(a
 
     CHECK(cudaMalloc(&b_grad, b->grad.size() * sizeof(float)));
     CHECK(cudaMalloc(&layer2_var1_grad, c->grad.size() * sizeof(float)));
-	
+
     if (m < 20000)
     {
         CHECK(cudaMalloc(&b_sum, a->data.size() * b->data.size() * sizeof(float)));
@@ -101,7 +101,7 @@ void Matmul::forward(bool training)
 void Matmul::backward()
 {
     timer_start(TMR_MATMUL_BW);
-    
+
     if (epoch == 0)
         CHECK(cudaMemcpyAsync(b_data, &(b->data[0]), sizeof(float) * b->data.size(), cudaMemcpyHostToDevice, stream1));
 
@@ -175,20 +175,22 @@ SparseMatmul::SparseMatmul(Variable *a, Variable *b, Variable *c, SparseIndex *s
 
     CHECK(cudaMemcpy(sp_indptr, &(sp->indptr[0]), sizeof(int) * sp->indptr.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(sp_indices, &(sp->indices[0]), sizeof(int) * sp->indices.size(), cudaMemcpyHostToDevice));
-	
-	std::vector<std::pair<int, int> > i_length;
-	for(int i = 0; i < sp->indptr.size() - 1; i++){
-		i_length.push_back({sp->indptr[i + 1] - sp->indptr[i], i});
-	}
-	std::sort(i_length.begin(), i_length.end());
-	std::reverse(i_length.begin(), i_length.end());
-	int *i_length_index;
-	i_length_index = (int *)malloc((sp->indptr.size() - 1) * sizeof(int));
-	for(int i = 0; i < sp->indptr.size() - 1; i++){
-		i_length_index[i] = i_length[i].second;
-	}
-	CHECK(cudaMalloc(&i_index, (sp->indptr.size() - 1) * sizeof(int)));
-	CHECK(cudaMemcpy(i_index, i_length_index, (sp->indptr.size() - 1) * sizeof(int), cudaMemcpyHostToDevice));
+
+    std::vector<std::pair<int, int>> i_length;
+    for (int i = 0; i < sp->indptr.size() - 1; i++)
+    {
+        i_length.push_back({sp->indptr[i + 1] - sp->indptr[i], i});
+    }
+    std::sort(i_length.begin(), i_length.end());
+    std::reverse(i_length.begin(), i_length.end());
+    int *i_length_index;
+    i_length_index = (int *)malloc((sp->indptr.size() - 1) * sizeof(int));
+    for (int i = 0; i < sp->indptr.size() - 1; i++)
+    {
+        i_length_index[i] = i_length[i].second;
+    }
+    CHECK(cudaMalloc(&i_index, (sp->indptr.size() - 1) * sizeof(int)));
+    CHECK(cudaMemcpy(i_index, i_length_index, (sp->indptr.size() - 1) * sizeof(int), cudaMemcpyHostToDevice));
 }
 
 SparseMatmul::~SparseMatmul()
@@ -244,20 +246,22 @@ GraphSum::GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim, boo
     {
         CHECK(cudaMalloc(&layer1_var2_data, out->data.size() * sizeof(float)));
         CHECK(cudaMalloc(&layer1_var2_grad, out->grad.size() * sizeof(float)));
-		
-		std::vector<std::pair<int, int> > src_length;
-		for(int i = 0; i < graph->indptr.size() - 1; i++){
-			src_length.push_back({graph->indptr[i + 1] - graph->indptr[i], i});
-		}
-		std::sort(src_length.begin(), src_length.end());
-		std::reverse(src_length.begin(), src_length.end());
-		int *src_length_index;
-		src_length_index = (int *)malloc((graph->indptr.size() - 1) * sizeof(int));
-		for(int i = 0; i < graph->indptr.size() - 1; i++){
-			src_length_index[i] = src_length[i].second;
-		}
-		CHECK(cudaMalloc(&src_index, (graph->indptr.size() - 1) * sizeof(int)));
-		CHECK(cudaMemcpy(src_index, src_length_index, (graph->indptr.size() - 1) * sizeof(int), cudaMemcpyHostToDevice));
+
+        std::vector<std::pair<int, int>> src_length;
+        for (int i = 0; i < graph->indptr.size() - 1; i++)
+        {
+            src_length.push_back({graph->indptr[i + 1] - graph->indptr[i], i});
+        }
+        std::sort(src_length.begin(), src_length.end());
+        std::reverse(src_length.begin(), src_length.end());
+        int *src_length_index;
+        src_length_index = (int *)malloc((graph->indptr.size() - 1) * sizeof(int));
+        for (int i = 0; i < graph->indptr.size() - 1; i++)
+        {
+            src_length_index[i] = src_length[i].second;
+        }
+        CHECK(cudaMalloc(&src_index, (graph->indptr.size() - 1) * sizeof(int)));
+        CHECK(cudaMemcpy(src_index, src_length_index, (graph->indptr.size() - 1) * sizeof(int), cudaMemcpyHostToDevice));
     }
     else
     {
@@ -269,11 +273,11 @@ GraphSum::GraphSum(Variable *in, Variable *out, SparseIndex *graph, int dim, boo
 
     CHECK(cudaMemcpy(graph_indptr, &(graph->indptr[0]), sizeof(int) * graph->indptr.size(), cudaMemcpyHostToDevice));
     CHECK(cudaMemcpy(graph_indices, &(graph->indices[0]), sizeof(int) * graph->indices.size(), cudaMemcpyHostToDevice));
-	
+
     max_diff = 0;
-    for(int i = 1; i < graph->indptr.size(); i++)
+    for (int i = 1; i < graph->indptr.size(); i++)
     {
-    	max_diff = max(max_diff, graph->indptr[i] - graph->indptr[i - 1]);
+        max_diff = max(max_diff, graph->indptr[i] - graph->indptr[i - 1]);
     }
 }
 
@@ -287,37 +291,40 @@ void GraphSum::forward(bool training)
 {
     timer_start(TMR_GRAPHSUM_FW);
 
-	if (graph->indptr.size() - 1 < 5000) {
-		dim3 blocksPerGrid0(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-		dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
-		if (isFirst)
-			gpu_zero<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var2_data, dim, (graph->indptr.size() - 1) * dim);
-		if (!isFirst)
-			gpu_zero<<<blocksPerGrid0, threadsPerBlock0>>>(output_data, dim, (graph->indptr.size() - 1) * dim);
-		CHECK_KERNELCALL();
+    if (graph->indptr.size() - 1 < 5000)
+    {
+        dim3 blocksPerGrid0(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+        dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
+        if (isFirst)
+            gpu_zero<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var2_data, dim, (graph->indptr.size() - 1) * dim);
+        if (!isFirst)
+            gpu_zero<<<blocksPerGrid0, threadsPerBlock0>>>(output_data, dim, (graph->indptr.size() - 1) * dim);
+        CHECK_KERNELCALL();
 
-		dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, sqrt(max_diff), 1);
-		dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-		if (isFirst)
-			gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var1_data, layer1_var2_data, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
-		else
-			gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_data, output_data, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
-		CHECK_KERNELCALL();
-		CHECK(cudaDeviceSynchronize());
-	} else {
-	    dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-		dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-		if (isFirst)
-			gpu_graph_sum_forward2<<<blocksPerGrid, threadsPerBlock>>>(src_index, layer1_var1_data, layer1_var2_data, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
-		else
-			gpu_graph_sum_forward2<<<blocksPerGrid, threadsPerBlock>>>(src_index, layer2_var1_data, output_data, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
-		CHECK_KERNELCALL();
-		CHECK(cudaDeviceSynchronize());
-	}
-	if (!isFirst)
-	{
+        dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, sqrt(max_diff), 1);
+        dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+        if (isFirst)
+            gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var1_data, layer1_var2_data, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
+        else
+            gpu_graph_sum_forward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_data, output_data, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+    }
+    else
+    {
+        dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+        dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+        if (isFirst)
+            gpu_graph_sum_forward2<<<blocksPerGrid, threadsPerBlock>>>(src_index, layer1_var1_data, layer1_var2_data, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
+        else
+            gpu_graph_sum_forward2<<<blocksPerGrid, threadsPerBlock>>>(src_index, layer2_var1_data, output_data, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+    }
+    if (!isFirst)
+    {
         CHECK(cudaMemcpy(&out->data[0], output_data, sizeof(float) * out->data.size(), cudaMemcpyDeviceToHost));
-	}
+    }
     timer_stop(TMR_GRAPHSUM_FW);
 }
 
@@ -325,32 +332,35 @@ void GraphSum::backward()
 {
     timer_start(TMR_GRAPHSUM_BW);
 
-	if (graph->indptr.size() - 1 < 5000) {
-		dim3 blocksPerGrid0(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-		dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
-		if (isFirst)
-			gpu_zero<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var1_grad, dim, (graph->indptr.size() - 1) * dim);
-		if (!isFirst)
-			gpu_zero<<<blocksPerGrid0, threadsPerBlock0>>>(layer2_var1_grad, dim, (graph->indptr.size() - 1) * dim);
+    if (graph->indptr.size() - 1 < 5000)
+    {
+        dim3 blocksPerGrid0(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+        dim3 threadsPerBlock0(BLOCK_DIM, 1, 1);
+        if (isFirst)
+            gpu_zero<<<blocksPerGrid0, threadsPerBlock0>>>(layer1_var1_grad, dim, (graph->indptr.size() - 1) * dim);
+        if (!isFirst)
+            gpu_zero<<<blocksPerGrid0, threadsPerBlock0>>>(layer2_var1_grad, dim, (graph->indptr.size() - 1) * dim);
 
-		dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, sqrt(max_diff), 1);
-		dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-		if (isFirst)
-			gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var1_grad, layer1_var2_grad, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
-		else
-			gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_grad, output_grad, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
-		CHECK_KERNELCALL();
-		CHECK(cudaDeviceSynchronize());
-	} else {
-	    dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
-		dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
-		if (isFirst)
-			gpu_graph_sum_backward2<<<blocksPerGrid, threadsPerBlock>>>(src_index, layer1_var1_grad, layer1_var2_grad, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
-		else
-			gpu_graph_sum_backward2<<<blocksPerGrid, threadsPerBlock>>>(src_index, layer2_var1_grad, output_grad, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
-		CHECK_KERNELCALL();
-		CHECK(cudaDeviceSynchronize());
-	}
+        dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, sqrt(max_diff), 1);
+        dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+        if (isFirst)
+            gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var1_grad, layer1_var2_grad, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
+        else
+            gpu_graph_sum_backward<<<blocksPerGrid, threadsPerBlock>>>(layer2_var1_grad, output_grad, graph_indptr, graph_indices, dim, sqrt(max_diff), (graph->indptr.size() - 1) * dim);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+    }
+    else
+    {
+        dim3 blocksPerGrid(((graph->indptr.size() - 1) * dim + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
+        dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
+        if (isFirst)
+            gpu_graph_sum_backward2<<<blocksPerGrid, threadsPerBlock>>>(src_index, layer1_var1_grad, layer1_var2_grad, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
+        else
+            gpu_graph_sum_backward2<<<blocksPerGrid, threadsPerBlock>>>(src_index, layer2_var1_grad, output_grad, graph_indptr, graph_indices, dim, (graph->indptr.size() - 1) * dim);
+        CHECK_KERNELCALL();
+        CHECK(cudaDeviceSynchronize());
+    }
     timer_stop(TMR_GRAPHSUM_BW);
 }
 
@@ -358,10 +368,9 @@ void GraphSum::backward()
 
 /**
  * Each predicted class probability is compared to the actual class desired and a loss is computed to penalize the proabability based on how far it is with respect to the actual expected value.
- * Also called logaritmic loss. 
-*/
-CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth_training, int *truth_validation, int *truth_testing, float *loss, int num_classes, int num_epochs) :
-        logits(logits), truth_training(truth_training), truth_validation(truth_validation), truth_testing(truth_testing), loss(loss), num_classes(num_classes),  num_epochs(num_epochs)
+ * Also called logaritmic loss.
+ */
+CrossEntropyLoss::CrossEntropyLoss(Variable *logits, int *truth_training, int *truth_validation, int *truth_testing, float *loss, int num_classes, int num_epochs) : logits(logits), truth_training(truth_training), truth_validation(truth_validation), truth_testing(truth_testing), loss(loss), num_classes(num_classes), num_epochs(num_epochs)
 {
     CHECK(cudaMalloc(&count_gpu, sizeof(int)));
     CHECK(cudaMalloc(&total_loss_gpu, sizeof(float)));
@@ -388,12 +397,13 @@ CrossEntropyLoss::~CrossEntropyLoss()
     CHECK(cudaFree(output_grad));
     CHECK(cudaFree(original_input_data));
     CHECK(cudaFree(rand1_gpu));
-	CHECK(cudaFree(rand2_gpu));
-	CHECK(cudaFree(src_index));
+    CHECK(cudaFree(rand2_gpu));
+    CHECK(cudaFree(src_index));
 }
 
-void CrossEntropyLoss::forward(bool training) {
-    
+void CrossEntropyLoss::forward(bool training)
+{
+
     timer_start(TMR_LOSS_FW);
     float total_loss = 0;
     int count = 0;
@@ -422,7 +432,7 @@ void CrossEntropyLoss::forward(bool training) {
     CHECK(cudaDeviceSynchronize());
 
     CHECK(cudaMemcpy(&total_loss, total_loss_gpu, sizeof(float), cudaMemcpyDeviceToHost));
-	CHECK(cudaMemcpy(&count, count_gpu, sizeof(int), cudaMemcpyDeviceToHost));
+    CHECK(cudaMemcpy(&count, count_gpu, sizeof(int), cudaMemcpyDeviceToHost));
 
     *loss = total_loss / count;
     if (training)
@@ -436,7 +446,8 @@ void CrossEntropyLoss::forward(bool training) {
     timer_stop(TMR_LOSS_FW);
 }
 
-void CrossEntropyLoss::backward() {
+void CrossEntropyLoss::backward()
+{
 }
 
 // ################################################################################################################
@@ -448,7 +459,7 @@ void CrossEntropyLoss::backward() {
 ReLU::ReLU(Variable *in)
 {
     this->in = in;
-	
+
     CHECK(cudaMalloc(&mask_gpu, in->data.size() * sizeof(bool)));
 }
 
@@ -460,20 +471,20 @@ ReLU::~ReLU()
 void ReLU::forward(bool training)
 {
     timer_start(TMR_RELU_FW);
-	
+
     dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
     dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
     gpu_relu_forward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_data, mask_gpu, training, in->data.size());
     CHECK_KERNELCALL();
     CHECK(cudaDeviceSynchronize());
-	
+
     timer_stop(TMR_RELU_FW);
 }
 
 void ReLU::backward()
 {
     timer_start(TMR_RELU_BW);
-	
+
     dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
     dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
     gpu_relu_backward<<<blocksPerGrid, threadsPerBlock>>>(layer1_var2_grad, mask_gpu, in->data.size());
@@ -503,7 +514,7 @@ Dropout::Dropout(Variable *in, float p, bool isFirst, std::string input_name) : 
         CHECK(cudaMalloc(&input_data, in->data.size() * sizeof(float)));
         CHECK(cudaMalloc(&input_grad, in->grad.size() * sizeof(float)));
         max_dim_dropout = in->data.size();
-        if (input_name != "citeseer") 
+        if (input_name != "citeseer")
         {
             CHECK(cudaMalloc(&original_input_data, in->data.size() * sizeof(float)));
             CHECK(cudaMemcpy(original_input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
@@ -514,7 +525,7 @@ Dropout::Dropout(Variable *in, float p, bool isFirst, std::string input_name) : 
         srand(time(NULL));
         if (in->data.size() > max_dim_dropout)
             max_dim_dropout = in->data.size();
-		unsigned long long *rand1, *rand2;
+        unsigned long long *rand1, *rand2;
         rand1 = (unsigned long long *)malloc(max_dim_dropout * sizeof(unsigned long long));
         rand2 = (unsigned long long *)malloc(max_dim_dropout * sizeof(unsigned long long));
         for (int i = 0; i < max_dim_dropout; i++)
@@ -548,16 +559,18 @@ void Dropout::forward(bool training)
     {
         if (isFirst)
         {
-            if (input_name != "citeseer") {
+            if (input_name != "citeseer")
+            {
                 dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
                 dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
                 gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
                 CHECK_KERNELCALL();
             }
-            else {
+            else
+            {
                 CHECK(cudaMemcpy(input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
             }
-	    }
+        }
         return;
     }
     timer_start(TMR_DROPOUT_FW);
@@ -566,12 +579,15 @@ void Dropout::forward(bool training)
 
     if (isFirst)
     {
-        if (input_name != "citeseer") {
+        if (input_name != "citeseer")
+        {
             dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
             dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
             gpu_set_original_input<<<blocksPerGrid, threadsPerBlock>>>(input_data, original_input_data, in->data.size());
             CHECK_KERNELCALL();
-        } else {
+        }
+        else
+        {
             CHECK(cudaMemcpy(input_data, &(in->data[0]), sizeof(float) * in->data.size(), cudaMemcpyHostToDevice));
         }
     }
@@ -581,7 +597,7 @@ void Dropout::forward(bool training)
     {
         isMask = true;
     }
-    
+
     dim3 blocksPerGrid((in->data.size() + BLOCK_DIM - 1) / BLOCK_DIM, 1, 1);
     dim3 threadsPerBlock(BLOCK_DIM, 1, 1);
     if (isFirst)
@@ -597,7 +613,7 @@ void Dropout::backward()
 {
     if (in->grad.empty())
         return;
-    
+
     timer_start(TMR_DROPOUT_BW);
     float scale = 1 / (1 - p);
 
